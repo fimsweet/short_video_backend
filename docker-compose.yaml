@@ -1,17 +1,18 @@
 version: '3.8'
 services:
-  postgres:
-    image: postgres:13
-    container_name: postgres_db
+  mysql:
+    image: mysql:8.0
+    container_name: mysql_db
     restart: always
     ports:
-      - "5432:5432"
+      - "3306:3306" 
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: short_video_db
+      MYSQL_ROOT_PASSWORD: root_password  
+      MYSQL_DATABASE: short_video_db      
+      MYSQL_USER: admin                   
+      MYSQL_PASSWORD: password            
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
 
 volumes:
-  postgres_data:
+  mysql_data:
