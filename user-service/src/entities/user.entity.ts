@@ -14,6 +14,9 @@ export class User {
   @Column()
   password: string;
 
+  @Column({ nullable: true, type: 'varchar', length: 255 })
+  avatar: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

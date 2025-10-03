@@ -1,35 +1,27 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { NestExpressApplication } from '@nestjs/platform-express';
+import { join } from 'path';
+import * as express from 'express';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   
-  // Enable CORS cho Flutter app - sửa lỗi origin
+  // Serve static files với CORS headers
+  const uploadsPath = join(__dirname, '..', 'uploads');
+  console.log('Serving static files from:', uploadsPath);
+  
+  app.use('/uploads', (req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET');
+    res.header('Cross-Origin-Resource-Policy', 'cross-origin');
+    next();
+  }, express.static(uploadsPath));
+  
+  // Enable CORS cho Flutter app
   app.enableCors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps or curl requests)
-      if (!origin) return callback(null, true);
-
-      // Whitelist of allowed origins
-      const whitelist = [
-        'http://localhost:59294', 
-        'http://127.0.0.1:59294', 
-        'http://10.0.2.2:3000', 
-        'http://localhost:3000'
-      ];
-
-      // Allow all localhost origins for development
-      if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
-        return callback(null, true);
-      }
-
-      if (whitelist.indexOf(origin) !== -1) {
-        return callback(null, true);
-      }
-      
-      callback(new Error('Not allowed by CORS'));
-    },
+    origin: true, // Cho phép tất cả origin trong development
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
@@ -40,5 +32,6 @@ async function bootstrap() {
   
   await app.listen(process.env.PORT ?? 3000);
   console.log('User service is running on http://localhost:3000');
+  console.log('Static files available at http://localhost:3000/uploads/');
 }
 bootstrap();
