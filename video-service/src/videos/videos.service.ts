@@ -98,6 +98,15 @@ export class VideosService {
     });
   }
 
+  // Get all ready videos for feed (guest mode)
+  async getAllVideos(limit: number = 50): Promise<Video[]> {
+    return this.videoRepository.find({
+      where: { status: VideoStatus.READY },
+      order: { createdAt: 'DESC' },
+      take: limit,
+    });
+  }
+
   async updateVideoStatus(
     videoId: string,
     status: VideoStatus,

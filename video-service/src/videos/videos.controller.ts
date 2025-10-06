@@ -48,4 +48,9 @@ export class VideosController {
   async getUserVideos(@Param('userId') userId: string) {
     return this.videosService.getVideosByUserId(userId);
   }
+
+  @Get('feed/all')
+  async getFeed() {
+    return this.videosService.getAllVideos(50);
+  }
 }

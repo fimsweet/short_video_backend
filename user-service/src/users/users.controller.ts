@@ -11,6 +11,7 @@ import {
   UseGuards,
   Request,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
@@ -20,6 +21,16 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
+
+  @Get('id/:userId')
+  async findById(@Param('userId') userId: string) {
+    const user = await this.usersService.findById(parseInt(userId, 10));
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    const { password, ...result } = user;
+    return result;
+  }
 
   @Get(':username')
   findOne(@Param('username') username: string) {
