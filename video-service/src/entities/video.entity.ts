@@ -1,4 +1,6 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany } from 'typeorm';
+import { Like } from './like.entity';
+import { Comment } from './comment.entity';
 
 export enum VideoStatus {
   UPLOADING = 'uploading',
@@ -54,4 +56,10 @@ export class Video {
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+  @OneToMany(() => Like, like => like.video)
+  likes: Like[];
+
+  @OneToMany(() => Comment, comment => comment.video)
+  comments: Comment[];
 }

@@ -1,10 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as amqp from 'amqplib';
 import { Video, VideoStatus } from '../entities/video.entity';
 import { UploadVideoDto } from './dto/upload-video.dto';
+import { LikesService } from '../likes/likes.service';
+import { CommentsService } from '../comments/comments.service';
 
 @Injectable()
 export class VideosService {
@@ -15,6 +17,10 @@ export class VideosService {
     @InjectRepository(Video)
     private videoRepository: Repository<Video>,
     private configService: ConfigService,
+    @Inject(forwardRef(() => LikesService))
+    private likesService: LikesService,
+    @Inject(forwardRef(() => CommentsService))
+    private commentsService: CommentsService,
   ) {
     this.rabbitMQUrl = this.configService.get<string>('RABBITMQ_URL') || 'amqp://admin:password@localhost:5672';
     this.queueName = this.configService.get<string>('RABBITMQ_QUEUE') || 'video_processing_queue';
@@ -28,7 +34,7 @@ export class VideosService {
       console.log('📹 Starting video upload process...');
       console.log('   File:', file.originalname, `(${file.size} bytes)`);
       console.log('   User ID:', uploadVideoDto.userId);
-      
+
       // 1. Tạo record trong database
       const video = this.videoRepository.create({
         userId: uploadVideoDto.userId,
@@ -87,8 +93,18 @@ export class VideosService {
     }
   }
 
-  async getVideoById(id: string): Promise<Video | null> {
-    return this.videoRepository.findOne({ where: { id } });
+  async getVideoById(id: string): Promise<any> {
+    const video = await this.videoRepository.findOne({ where: { id } });
+    if (!video) return null;
+
+    const likeCount = await this.likesService.getLikeCount(id);
+    const commentCount = await this.commentsService.getCommentCount(id);
+
+    return {
+      ...video,
+      likeCount,
+      commentCount,
+    };
   }
 
   async getVideosByUserId(userId: string): Promise<Video[]> {
@@ -99,12 +115,27 @@ export class VideosService {
   }
 
   // Get all ready videos for feed (guest mode)
-  async getAllVideos(limit: number = 50): Promise<Video[]> {
-    return this.videoRepository.find({
+  async getAllVideos(limit: number = 50): Promise<any[]> {
+    const videos = await this.videoRepository.find({
       where: { status: VideoStatus.READY },
       order: { createdAt: 'DESC' },
       take: limit,
     });
+
+    // Add like and comment counts
+    const videosWithCounts = await Promise.all(
+      videos.map(async (video) => {
+        const likeCount = await this.likesService.getLikeCount(video.id);
+        const commentCount = await this.commentsService.getCommentCount(video.id);
+        return {
+          ...video,
+          likeCount,
+          commentCount,
+        };
+      }),
+    );
+
+    return videosWithCounts;
   }
 
   async updateVideoStatus(
