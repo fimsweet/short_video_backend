@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Video } from '../entities/video.entity';
 import { Like } from '../entities/like.entity';
 import { Comment } from '../entities/comment.entity';
+import { CommentLike } from '../entities/comment-like.entity';
 
 export const getDatabaseConfig = (configService: ConfigService): TypeOrmModuleOptions => ({
   type: 'mysql',
@@ -11,7 +12,7 @@ export const getDatabaseConfig = (configService: ConfigService): TypeOrmModuleOp
   username: configService.get('DB_USERNAME'),
   password: configService.get('DB_PASSWORD'),
   database: configService.get('DB_DATABASE'),
-  entities: [Video, Like, Comment], // Add Like and Comment entities
+  entities: [Video, Like, Comment, CommentLike], // ADDED: CommentLike
   synchronize: true, // ⚠️ Set false in production
   logging: true,
 });
