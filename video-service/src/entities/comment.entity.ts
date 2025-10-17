@@ -21,6 +21,9 @@ export class Comment {
   @Index()
   parentId: string | null; // For replies
 
+  @Column({ type: 'boolean', default: false })
+  isPinned: boolean; // For pinned/highlighted comments
+
   @CreateDateColumn()
   createdAt: Date;
 

@@ -116,26 +116,39 @@ export class VideosService {
 
   // Get all ready videos for feed (guest mode)
   async getAllVideos(limit: number = 50): Promise<any[]> {
-    const videos = await this.videoRepository.find({
-      where: { status: VideoStatus.READY },
-      order: { createdAt: 'DESC' },
-      take: limit,
-    });
+    try {
+      console.log(`📹 Fetching all videos (limit: ${limit})...`);
 
-    // Add like and comment counts
-    const videosWithCounts = await Promise.all(
-      videos.map(async (video) => {
-        const likeCount = await this.likesService.getLikeCount(video.id);
-        const commentCount = await this.commentsService.getCommentCount(video.id);
-        return {
-          ...video,
-          likeCount,
-          commentCount,
-        };
-      }),
-    );
+      const videos = await this.videoRepository.find({
+        where: { status: VideoStatus.READY },
+        order: { createdAt: 'DESC' },
+        take: limit,
+      });
 
-    return videosWithCounts;
+      console.log(`✅ Found ${videos.length} ready videos`);
+
+      // Add like and comment counts
+      const videosWithCounts = await Promise.all(
+        videos.map(async (video) => {
+          const likeCount = await this.likesService.getLikeCount(video.id);
+          const commentCount = await this.commentsService.getCommentCount(video.id);
+
+          console.log(`   Video ${video.id}: ${likeCount} likes, ${commentCount} comments`);
+
+          return {
+            ...video,
+            likeCount,
+            commentCount,
+          };
+        }),
+      );
+
+      console.log(`📤 Returning ${videosWithCounts.length} videos with counts`);
+      return videosWithCounts;
+    } catch (error) {
+      console.error('❌ Error in getAllVideos:', error);
+      throw error;
+    }
   }
 
   async updateVideoStatus(

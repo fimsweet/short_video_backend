@@ -41,6 +41,9 @@ export class Video {
   @Column({ type: 'bigint', nullable: true })
   fileSize: number; // Kích thước file (bytes)
 
+  @Column({ nullable: true })
+  aspectRatio: string; // e.g., "9:16" for TikTok-style videos
+
   @Column({
     type: 'enum',
     enum: VideoStatus,

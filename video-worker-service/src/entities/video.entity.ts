@@ -39,6 +39,9 @@ export class Video {
   @Column({ type: 'bigint', nullable: true })
   fileSize: number;
 
+  @Column({ nullable: true })
+  aspectRatio: string; // e.g., "9:16", "16:9"
+
   @Column({
     type: 'enum',
     enum: VideoStatus,
