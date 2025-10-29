@@ -7,6 +7,8 @@ import { Video, VideoStatus } from '../entities/video.entity';
 import { UploadVideoDto } from './dto/upload-video.dto';
 import { LikesService } from '../likes/likes.service';
 import { CommentsService } from '../comments/comments.service';
+import { HttpService } from '@nestjs/axios';
+import { firstValueFrom } from 'rxjs';
 
 @Injectable()
 export class VideosService {
@@ -21,6 +23,7 @@ export class VideosService {
     private likesService: LikesService,
     @Inject(forwardRef(() => CommentsService))
     private commentsService: CommentsService,
+    private httpService: HttpService,
   ) {
     this.rabbitMQUrl = this.configService.get<string>('RABBITMQ_URL') || 'amqp://admin:password@localhost:5672';
     this.queueName = this.configService.get<string>('RABBITMQ_QUEUE') || 'video_processing_queue';
@@ -147,6 +150,55 @@ export class VideosService {
       return videosWithCounts;
     } catch (error) {
       console.error('❌ Error in getAllVideos:', error);
+      throw error;
+    }
+  }
+
+  // Get videos from users that the current user is following
+  async getFollowingVideos(userId: number, limit: number = 50): Promise<any[]> {
+    try {
+      console.log(`📹 Fetching following videos for user ${userId}...`);
+
+      // Get list of users that current user is following from user-service
+      const userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3000';
+      const response = await firstValueFrom(
+        this.httpService.get(`${userServiceUrl}/follows/following/${userId}`)
+      );
+      
+      const followingIds: number[] = response.data.followingIds || [];
+      console.log(`✅ User ${userId} is following ${followingIds.length} users`);
+
+      if (followingIds.length === 0) {
+        return [];
+      }
+
+      // Get videos from followed users
+      const videos = await this.videoRepository
+        .createQueryBuilder('video')
+        .where('video.status = :status', { status: VideoStatus.READY })
+        .andWhere('video.userId IN (:...userIds)', { userIds: followingIds.map(id => id.toString()) })
+        .orderBy('video.createdAt', 'DESC')
+        .take(limit)
+        .getMany();
+
+      console.log(`✅ Found ${videos.length} videos from following users`);
+
+      // Add like and comment counts
+      const videosWithCounts = await Promise.all(
+        videos.map(async (video) => {
+          const likeCount = await this.likesService.getLikeCount(video.id);
+          const commentCount = await this.commentsService.getCommentCount(video.id);
+          return {
+            ...video,
+            likeCount,
+            commentCount,
+          };
+        }),
+      );
+
+      return videosWithCounts;
+    } catch (error) {
+      console.error('❌ Error in getFollowingVideos:', error);
       throw error;
     }
   }

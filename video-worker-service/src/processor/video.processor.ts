@@ -190,9 +190,9 @@ export class VideoProcessorService implements OnModuleInit {
           '-g 48',
           '-keyint_min 48',
           
-          // TikTok-style: Scale to fit 9:16 WITHOUT cropping (add black bars if needed)
-          // This will maintain full video content with letterboxing
-          '-vf scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black',
+          // Smart scaling: only crop portrait videos to 9:16
+          // Keep landscape videos as-is (with letterbox)
+          '-vf scale=\'if(gt(iw/ih,9/16),1080,-2)\':\'if(gt(iw/ih,9/16),-2,1920)\':flags=lanczos',
           
           '-hls_time 10',
           '-hls_playlist_type vod',
@@ -206,7 +206,7 @@ export class VideoProcessorService implements OnModuleInit {
           console.log(`[FFmpeg] Processing: ${progress.percent?.toFixed(2)}%`);
         })
         .on('end', () => {
-          console.log('[FFmpeg] Conversion completed - Video fitted to 9:16 with letterboxing');
+          console.log('[FFmpeg] Conversion completed');
           resolve();
         })
         .on('error', (err) => {

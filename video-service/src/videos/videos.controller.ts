@@ -53,4 +53,9 @@ export class VideosController {
   async getFeed() {
     return this.videosService.getAllVideos(50);
   }
+
+  @Get('feed/following/:userId')
+  async getFollowingFeed(@Param('userId') userId: string) {
+    return this.videosService.getFollowingVideos(parseInt(userId, 10), 50);
+  }
 }
