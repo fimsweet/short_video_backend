@@ -6,6 +6,7 @@ import {
   Patch,
   Param,
   Delete,
+  Put, // Add this
   UseInterceptors,
   UploadedFile,
   UseGuards,
@@ -66,6 +67,18 @@ export class UsersController {
     return {
       message: 'Avatar removed successfully',
       user: result,
+    };
+  }
+
+  @Put('profile')
+  @UseGuards(JwtAuthGuard)
+  async updateProfile(@Request() req, @Body() updateData: { bio?: string }) {
+    const userId = req.user.userId;
+    const updatedUser = await this.usersService.updateProfile(userId, updateData);
+    return {
+      success: true,
+      message: 'Profile updated successfully',
+      user: updatedUser,
     };
   }
 }

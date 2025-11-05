@@ -110,14 +110,55 @@ export class VideosService {
     };
   }
 
-  async getVideosByUserId(userId: string): Promise<Video[]> {
-    return this.videoRepository.find({
-      where: { userId },
-      order: { createdAt: 'DESC' },
-    });
+  async getVideosByUserId(userId: string): Promise<any[]> {
+    try {
+      console.log(`📹 Fetching videos for user ${userId}...`);
+
+      const videos = await this.videoRepository.find({
+        where: { 
+          userId,
+          status: VideoStatus.READY,
+        },
+        order: { createdAt: 'DESC' },
+      });
+
+      console.log(`✅ Found ${videos.length} videos for user ${userId}`);
+
+      // Add like and comment counts
+      const videosWithCounts = await Promise.all(
+        videos.map(async (video) => {
+          const likeCount = await this.likesService.getLikeCount(video.id);
+          const commentCount = await this.commentsService.getCommentCount(video.id);
+
+          // Log thumbnail info
+          console.log(`   Video ${video.id}:`);
+          console.log(`     thumbnailUrl: ${video.thumbnailUrl}`);
+          console.log(`     hlsUrl: ${video.hlsUrl}`);
+
+          return {
+            id: video.id,
+            userId: video.userId,
+            title: video.title,
+            description: video.description,
+            hlsUrl: video.hlsUrl,
+            thumbnailUrl: video.thumbnailUrl, // Make sure this is included
+            aspectRatio: video.aspectRatio,
+            status: video.status,
+            createdAt: video.createdAt,
+            likeCount,
+            commentCount,
+            viewCount: 0, // TODO: Add view tracking
+          };
+        }),
+      );
+
+      return videosWithCounts;
+    } catch (error) {
+      console.error('❌ Error in getVideosByUserId:', error);
+      throw error;
+    }
   }
 
-  // Get all ready videos for feed (guest mode)
   async getAllVideos(limit: number = 50): Promise<any[]> {
     try {
       console.log(`📹 Fetching all videos (limit: ${limit})...`);

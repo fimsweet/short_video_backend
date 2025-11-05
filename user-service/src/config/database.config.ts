@@ -9,7 +9,7 @@ export const databaseConfig: TypeOrmModuleOptions = {
   password: process.env.DB_PASSWORD || 'password',
   database: process.env.DB_NAME || 'short_video_db',
   entities: [User],
-  synchronize: process.env.NODE_ENV !== 'production',
+  synchronize: true, // Set to true for development only
   logging: process.env.NODE_ENV === 'development',
   autoLoadEntities: true,
   retryAttempts: 3,

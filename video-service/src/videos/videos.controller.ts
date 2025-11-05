@@ -46,7 +46,11 @@ export class VideosController {
 
   @Get('user/:userId')
   async getUserVideos(@Param('userId') userId: string) {
-    return this.videosService.getVideosByUserId(userId);
+    const videos = await this.videosService.getVideosByUserId(userId);
+    return {
+      success: true,
+      data: videos,
+    };
   }
 
   @Get('feed/all')
@@ -57,5 +61,19 @@ export class VideosController {
   @Get('feed/following/:userId')
   async getFollowingFeed(@Param('userId') userId: string) {
     return this.videosService.getFollowingVideos(parseInt(userId, 10), 50);
+  }
+
+  // Test endpoint to check thumbnail
+  @Get('test/thumbnail/:videoId')
+  async testThumbnail(@Param('videoId') videoId: string) {
+    const video = await this.videosService.getVideoById(videoId);
+    return {
+      videoId,
+      thumbnailUrl: video?.thumbnailUrl,
+      hlsUrl: video?.hlsUrl,
+      fullThumbnailUrl: video?.thumbnailUrl
+        ? `http://localhost:3002${video.thumbnailUrl}`
+        : null,
+    };
   }
 }

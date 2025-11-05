@@ -21,12 +21,30 @@ async function bootstrap() {
   if (fs.existsSync(processedVideosPath)) {
     const folders = fs.readdirSync(processedVideosPath);
     console.log('Folders in processed_videos:', folders);
+    
+    // Log thumbnail files
+    folders.forEach(folder => {
+      const folderPath = join(processedVideosPath, folder);
+      if (fs.statSync(folderPath).isDirectory()) {
+        const files = fs.readdirSync(folderPath);
+        console.log(`  ${folder}:`, files);
+      }
+    });
   }
   
   app.use('/uploads/processed_videos', (req, res, next) => {
+    console.log('📥 Serving file:', req.url);
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET');
     res.header('Cross-Origin-Resource-Policy', 'cross-origin');
+    
+    // Set proper content type for images
+    if (req.url.endsWith('.jpg') || req.url.endsWith('.jpeg')) {
+      res.header('Content-Type', 'image/jpeg');
+    } else if (req.url.endsWith('.png')) {
+      res.header('Content-Type', 'image/png');
+    }
+    
     next();
   }, express.static(processedVideosPath));
 

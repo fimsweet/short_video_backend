@@ -115,17 +115,24 @@ export class VideoProcessorService implements OnModuleInit {
       console.log(`🎞️ Starting FFmpeg conversion...`);
       await this.convertToHLS(inputPath, outputDir);
 
-      // 5. Cập nhật database với aspect ratio
+      // 5. Tạo thumbnail từ video
+      console.log(`📸 Generating thumbnail...`);
+      const thumbnailPath = await this.generateThumbnail(inputPath, outputDir);
+      const thumbnailUrl = thumbnailPath ? `/uploads/processed_videos/${outputFileName}/thumbnail.jpg` : null;
+
+      // 6. Cập nhật database với aspect ratio và thumbnail
       const hlsUrl = `/uploads/processed_videos/${outputFileName}/playlist.m3u8`;
       await this.videoRepository.update(videoId, {
         status: VideoStatus.READY,
         hlsUrl: hlsUrl,
+        thumbnailUrl: thumbnailUrl,
         aspectRatio: originalAspectRatio,
       });
 
       console.log(`\n${'='.repeat(60)}`);
       console.log(`✅ VIDEO PROCESSING COMPLETED: ${videoId}`);
       console.log(`   HLS URL: ${hlsUrl}`);
+      console.log(`   Thumbnail URL: ${thumbnailUrl}`);
       console.log(`   Aspect Ratio: ${originalAspectRatio}`);
       console.log(`${'='.repeat(60)}\n`);
     } catch (error) {
@@ -214,6 +221,39 @@ export class VideoProcessorService implements OnModuleInit {
           reject(err);
         })
         .run();
+    });
+  }
+
+  private generateThumbnail(inputPath: string, outputDir: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const thumbnailPath = `${outputDir}/thumbnail.jpg`;
+      
+      console.log(`📸 Generating thumbnail at: ${thumbnailPath}`);
+      
+      ffmpeg(inputPath)
+        .screenshots({
+          count: 1, // Generate 1 screenshot
+          timemarks: ['10%'], // At 10% of video duration
+          filename: 'thumbnail.jpg',
+          folder: outputDir,
+          size: '405x720', // 9:16 aspect ratio for grid view
+        })
+        .on('end', () => {
+          // Verify file was created
+          if (fs.existsSync(thumbnailPath)) {
+            const stats = fs.statSync(thumbnailPath);
+            console.log(`✅ Thumbnail generated successfully: ${(stats.size / 1024).toFixed(2)} KB`);
+            resolve(thumbnailPath);
+          } else {
+            console.error('❌ Thumbnail file not created');
+            resolve('');
+          }
+        })
+        .on('error', (err) => {
+          console.error('[FFmpeg] Thumbnail generation error:', err);
+          // Don't reject - video can still work without thumbnail
+          resolve('');
+        });
     });
   }
 }

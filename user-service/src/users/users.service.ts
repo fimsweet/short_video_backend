@@ -81,4 +81,37 @@ export class UsersService {
     user.avatar = null;
     return await this.userRepository.save(user);
   }
+
+  async updateProfile(userId: number, updateData: { bio?: string; avatar?: string }) {
+    try {
+      console.log(`📝 Updating profile for user ${userId}`, updateData);
+
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) {
+        throw new Error('User not found');
+      }
+
+      if (updateData.bio !== undefined) {
+        user.bio = updateData.bio;
+      }
+
+      if (updateData.avatar !== undefined) {
+        user.avatar = updateData.avatar;
+      }
+
+      const updatedUser = await this.userRepository.save(user);
+      console.log(`✅ Profile updated for user ${userId}`);
+
+      return {
+        id: updatedUser.id,
+        username: updatedUser.username,
+        email: updatedUser.email,
+        avatar: updatedUser.avatar,
+        bio: updatedUser.bio,
+      };
+    } catch (error) {
+      console.error('❌ Error updating profile:', error);
+      throw error;
+    }
+  }
 }
