@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { VideosModule } from './videos/videos.module';
 import { LikesModule } from './likes/likes.module';
 import { CommentsModule } from './comments/comments.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { getDatabaseConfig } from './config/database.config';
 
 @Module({
@@ -20,6 +21,7 @@ import { getDatabaseConfig } from './config/database.config';
     VideosModule,
     LikesModule,
     CommentsModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}

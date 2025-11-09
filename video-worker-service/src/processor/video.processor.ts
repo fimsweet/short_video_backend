@@ -199,7 +199,7 @@ export class VideoProcessorService implements OnModuleInit {
           
           // Smart scaling: only crop portrait videos to 9:16
           // Keep landscape videos as-is (with letterbox)
-          '-vf scale=\'if(gt(iw/ih,9/16),1080,-2)\':\'if(gt(iw/ih,9/16),-2,1920)\':flags=lanczos',
+          "-vf scale='if(gt(iw/ih,9/16),1080,-2)':'if(gt(iw/ih,9/16),-2,1920)':flags=lanczos",
           
           '-hls_time 10',
           '-hls_playlist_type vod',
@@ -230,13 +230,22 @@ export class VideoProcessorService implements OnModuleInit {
       
       console.log(`📸 Generating thumbnail at: ${thumbnailPath}`);
       
+      // Use FFmpeg to create thumbnail with proper aspect ratio
       ffmpeg(inputPath)
-        .screenshots({
-          count: 1, // Generate 1 screenshot
-          timemarks: ['10%'], // At 10% of video duration
-          filename: 'thumbnail.jpg',
-          folder: outputDir,
-          size: '405x720', // 9:16 aspect ratio for grid view
+        .outputOptions([
+          // Seek to 10% of video duration
+          '-ss', '00:00:01',
+          // Take 1 frame
+          '-vframes', '1',
+          // Smart crop to 1:1 square for grid view (like Instagram/TikTok)
+          // This crops the center and scales to 720x720
+          '-vf', 'scale=720:720:force_original_aspect_ratio=increase,crop=720:720',
+          // Quality
+          '-q:v', '2',
+        ])
+        .output(thumbnailPath)
+        .on('start', (commandLine) => {
+          console.log('[FFmpeg Thumbnail] Command:', commandLine);
         })
         .on('end', () => {
           // Verify file was created
@@ -253,7 +262,8 @@ export class VideoProcessorService implements OnModuleInit {
           console.error('[FFmpeg] Thumbnail generation error:', err);
           // Don't reject - video can still work without thumbnail
           resolve('');
-        });
+        })
+        .run();
     });
   }
 }

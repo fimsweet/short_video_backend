@@ -1,5 +1,6 @@
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { User } from '../entities/user.entity';
+import { Follow } from '../entities/follow.entity';
 
 export const databaseConfig: TypeOrmModuleOptions = {
   type: 'mysql',
@@ -8,7 +9,7 @@ export const databaseConfig: TypeOrmModuleOptions = {
   username: process.env.DB_USERNAME || 'admin',
   password: process.env.DB_PASSWORD || 'password',
   database: process.env.DB_NAME || 'short_video_db',
-  entities: [User],
+  entities: [User, Follow],
   synchronize: true, // Set to true for development only
   logging: process.env.NODE_ENV === 'development',
   autoLoadEntities: true,

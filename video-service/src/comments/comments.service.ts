@@ -1,8 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { Comment } from '../entities/comment.entity';
 import { CommentLike } from '../entities/comment-like.entity';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../entities/notification.entity';
 
 @Injectable()
 export class CommentsService {
@@ -11,6 +13,8 @@ export class CommentsService {
     private commentRepository: Repository<Comment>,
     @InjectRepository(CommentLike)
     private commentLikeRepository: Repository<CommentLike>,
+    @Inject(forwardRef(() => NotificationsService))
+    private notificationsService: NotificationsService,
   ) {}
 
   async createComment(videoId: string, userId: string, content: string, parentId?: string): Promise<Comment> {
@@ -18,9 +22,37 @@ export class CommentsService {
       videoId,
       userId,
       content,
-      parentId: parentId ?? null, // FIXED: Use ?? instead of ||
+      parentId: parentId ?? null,
     });
-    return this.commentRepository.save(comment);
+    
+    const savedComment = await this.commentRepository.save(comment);
+
+    // Create notification for video owner
+    try {
+      // Get video to find owner using raw query
+      const videos = await this.commentRepository.manager.query(
+        'SELECT id, userId FROM videos WHERE id = ?',
+        [videoId]
+      );
+      
+      if (videos && videos.length > 0) {
+        const video = videos[0];
+        if (video.userId !== userId) {
+          await this.notificationsService.createNotification(
+            video.userId,
+            userId,
+            NotificationType.COMMENT,
+            videoId,
+            savedComment.id,
+            content,
+          );
+        }
+      }
+    } catch (e) {
+      console.error('Error creating comment notification:', e);
+    }
+
+    return savedComment;
   }
 
   async getCommentsByVideo(videoId: string): Promise<any[]> {

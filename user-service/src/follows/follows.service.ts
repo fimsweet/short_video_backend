@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
+import { HttpService } from '@nestjs/axios';
+import { firstValueFrom } from 'rxjs';
 import { Follow } from '../entities/follow.entity';
 
 @Injectable()
@@ -8,10 +11,11 @@ export class FollowsService {
   constructor(
     @InjectRepository(Follow)
     private followRepository: Repository<Follow>,
+    private configService: ConfigService,
+    private httpService: HttpService,
   ) {}
 
-  async toggleFollow(followerId: number, followingId: number): Promise<{ following: boolean; followerCount: number }> {
-    // Cannot follow yourself
+  async toggleFollow(followerId: number, followingId: number): Promise<{ following: boolean }> {
     if (followerId === followingId) {
       throw new Error('Cannot follow yourself');
     }
@@ -21,15 +25,27 @@ export class FollowsService {
     });
 
     if (existingFollow) {
-      // Unfollow
       await this.followRepository.remove(existingFollow);
-      const followerCount = await this.getFollowerCount(followingId);
-      return { following: false, followerCount };
+      return { following: false };
     } else {
-      // Follow
-      await this.followRepository.save({ followerId, followingId });
-      const followerCount = await this.getFollowerCount(followingId);
-      return { following: true, followerCount };
+      const newFollow = this.followRepository.create({ followerId, followingId });
+      await this.followRepository.save(newFollow);
+
+      // Send notification to video-service
+      try {
+        const videoServiceUrl = this.configService.get<string>('VIDEO_SERVICE_URL') || 'http://localhost:3001';
+        await firstValueFrom(
+          this.httpService.post(`${videoServiceUrl}/notifications/create`, {
+            recipientId: followingId.toString(),
+            senderId: followerId.toString(),
+            type: 'follow',
+          })
+        );
+      } catch (e) {
+        console.error('Error sending follow notification:', e);
+      }
+
+      return { following: true };
     }
   }
 
