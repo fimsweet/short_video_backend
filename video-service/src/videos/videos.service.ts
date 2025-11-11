@@ -103,6 +103,11 @@ export class VideosService {
     const likeCount = await this.likesService.getLikeCount(id);
     const commentCount = await this.commentsService.getCommentCount(id);
 
+    console.log(`📹 getVideoById(${id}):`);
+    console.log(`   likeCount: ${likeCount}`);
+    console.log(`   commentCount: ${commentCount}`);
+    console.log(`   thumbnailUrl: ${video.thumbnailUrl}`);
+
     return {
       ...video,
       likeCount,

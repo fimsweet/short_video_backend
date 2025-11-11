@@ -5,6 +5,7 @@ import { Like } from '../entities/like.entity';
 import { Comment } from '../entities/comment.entity';
 import { CommentLike } from '../entities/comment-like.entity';
 import { Notification } from '../entities/notification.entity';
+import { SavedVideo } from '../entities/saved-video.entity';
 
 export const getDatabaseConfig = (configService: ConfigService): TypeOrmModuleOptions => ({
   type: 'mysql',
@@ -13,7 +14,7 @@ export const getDatabaseConfig = (configService: ConfigService): TypeOrmModuleOp
   username: configService.get('DB_USERNAME'),
   password: configService.get('DB_PASSWORD'),
   database: configService.get('DB_DATABASE'),
-  entities: [Video, Like, Comment, CommentLike, Notification],
+  entities: [Video, Like, Comment, CommentLike, Notification, SavedVideo],
   synchronize: true,
   logging: true,
 });
