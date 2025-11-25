@@ -18,11 +18,21 @@ export class CommentsService {
   ) {}
 
   async createComment(videoId: string, userId: string, content: string, parentId?: string): Promise<Comment> {
+    // If replying to a reply, find the root parent comment
+    let rootParentId = parentId;
+    if (parentId) {
+      const parentComment = await this.commentRepository.findOne({ where: { id: parentId } });
+      if (parentComment && parentComment.parentId) {
+        // This is a reply to a reply, use the root parent instead
+        rootParentId = parentComment.parentId;
+      }
+    }
+
     const comment = this.commentRepository.create({
       videoId,
       userId,
       content,
-      parentId: parentId ?? null,
+      parentId: rootParentId ?? null,
     });
     
     const savedComment = await this.commentRepository.save(comment);
@@ -90,21 +100,20 @@ export class CommentsService {
   }
 
   async getReplies(commentId: string): Promise<any[]> {
-    // Get direct replies to this comment
+    // Get ALL replies to this comment (flat structure, no nesting)
     const replies = await this.commentRepository.find({
       where: { parentId: commentId },
       order: { createdAt: 'ASC' },
     });
 
-    // Get nested replies recursively
+    // Get like counts for each reply (NO recursive nested replies)
     const repliesWithData = await Promise.all(
       replies.map(async (reply) => {
         const likeCount = await this.getCommentLikeCount(reply.id);
-        const nestedReplies = await this.getReplies(reply.id); // RECURSIVE: Get replies of replies
         return {
           ...reply,
           likeCount,
-          replies: nestedReplies, // Include nested replies
+          // No nested replies - flat structure like TikTok/Facebook
         };
       }),
     );
@@ -118,19 +127,8 @@ export class CommentsService {
   }
 
   async getReplyCount(commentId: string): Promise<number> {
-    // Count direct replies only (not nested)
-    const directReplies = await this.commentRepository.count({ where: { parentId: commentId } });
-    
-    // Get all direct replies
-    const replies = await this.commentRepository.find({ where: { parentId: commentId } });
-    
-    // Count nested replies recursively
-    let nestedCount = 0;
-    for (const reply of replies) {
-      nestedCount += await this.getReplyCount(reply.id); // Recursive count
-    }
-    
-    return directReplies + nestedCount; // Total count
+    // Count only direct replies (flat structure)
+    return this.commentRepository.count({ where: { parentId: commentId } });
   }
 
   async deleteComment(commentId: string, userId: string): Promise<boolean> {
