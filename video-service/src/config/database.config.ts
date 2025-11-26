@@ -6,15 +6,18 @@ import { Comment } from '../entities/comment.entity';
 import { CommentLike } from '../entities/comment-like.entity';
 import { Notification } from '../entities/notification.entity';
 import { SavedVideo } from '../entities/saved-video.entity';
+import { Message } from '../entities/message.entity';
+import { Conversation } from '../entities/conversation.entity';
 
 export const getDatabaseConfig = (configService: ConfigService): TypeOrmModuleOptions => ({
   type: 'mysql',
-  host: configService.get('DB_HOST'),
-  port: configService.get('DB_PORT'),
-  username: configService.get('DB_USERNAME'),
-  password: configService.get('DB_PASSWORD'),
-  database: configService.get('DB_DATABASE'),
-  entities: [Video, Like, Comment, CommentLike, Notification, SavedVideo],
+  host: configService.get<string>('DB_HOST', 'localhost'),
+  port: configService.get<number>('DB_PORT', 3306),
+  username: configService.get<string>('DB_USERNAME', 'admin'),
+  password: configService.get<string>('DB_PASSWORD', 'password'),
+  database: configService.get<string>('DB_NAME', 'short_video_db'),
+  entities: [Video, Like, Comment, CommentLike, Notification, SavedVideo, Message, Conversation],
   synchronize: true,
-  logging: true,
+  logging: configService.get<string>('NODE_ENV') === 'development',
+  autoLoadEntities: true,
 });

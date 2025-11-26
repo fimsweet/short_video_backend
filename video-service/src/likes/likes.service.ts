@@ -38,11 +38,14 @@ export class LikesService {
   }
 
   async isLikedByUser(videoId: string, userId: string): Promise<boolean> {
+    console.log(`🔍 [DB] Checking like: videoId=${videoId}, userId=${userId}`);
+    
     const like = await this.likeRepository.findOne({
       where: { videoId, userId },
     });
+    
     const liked = !!like;
-    console.log(`✅ isLikedByUser: videoId=${videoId}, userId=${userId}, result=${liked}`);
+    console.log(`✅ [DB] Like found: ${liked}`, like ? `(id: ${like.id})` : '');
     return liked;
   }
 

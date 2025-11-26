@@ -56,6 +56,14 @@ export class FollowsService {
     return !!follow;
   }
 
+  async isMutualFollow(userId1: number, userId2: number): Promise<boolean> {
+    const [follow1, follow2] = await Promise.all([
+      this.followRepository.findOne({ where: { followerId: userId1, followingId: userId2 } }),
+      this.followRepository.findOne({ where: { followerId: userId2, followingId: userId1 } }),
+    ]);
+    return !!follow1 && !!follow2;
+  }
+
   async getFollowerCount(userId: number): Promise<number> {
     return this.followRepository.count({ where: { followingId: userId } });
   }
@@ -72,11 +80,43 @@ export class FollowsService {
     return follows.map(f => f.followerId);
   }
 
+  async getFollowersWithMutualStatus(userId: number): Promise<{ userId: number; isMutual: boolean }[]> {
+    const followers = await this.followRepository.find({
+      where: { followingId: userId },
+      select: ['followerId'],
+    });
+
+    const result = await Promise.all(
+      followers.map(async (f) => {
+        const isMutual = await this.isFollowing(userId, f.followerId);
+        return { userId: f.followerId, isMutual };
+      })
+    );
+
+    return result;
+  }
+
   async getFollowing(userId: number): Promise<number[]> {
     const follows = await this.followRepository.find({
       where: { followerId: userId },
       select: ['followingId'],
     });
     return follows.map(f => f.followingId);
+  }
+
+  async getFollowingWithMutualStatus(userId: number): Promise<{ userId: number; isMutual: boolean }[]> {
+    const following = await this.followRepository.find({
+      where: { followerId: userId },
+      select: ['followingId'],
+    });
+
+    const result = await Promise.all(
+      following.map(async (f) => {
+        const isMutual = await this.isFollowing(f.followingId, userId);
+        return { userId: f.followingId, isMutual };
+      })
+    );
+
+    return result;
   }
 }

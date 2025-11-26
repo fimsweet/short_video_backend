@@ -21,9 +21,9 @@ export class LikesController {
 
   @Get('check/:videoId/:userId')
   async checkLike(@Param('videoId') videoId: string, @Param('userId') userId: string) {
-    console.log(`🔍 Check like: videoId=${videoId}, userId=${userId}`);
+    console.log(`🔍 [API] Check like: videoId=${videoId}, userId=${userId}`);
     const liked = await this.likesService.isLikedByUser(videoId, userId);
-    console.log(`✅ Like status: ${liked}`);
+    console.log(`✅ [API] Like status for video ${videoId} by user ${userId}: ${liked}`);
     return { liked };
   }
 

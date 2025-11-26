@@ -47,4 +47,28 @@ export class FollowsController {
     ]);
     return { followerCount, followingCount };
   }
+
+  @Get('followers-with-status/:userId')
+  async getFollowersWithStatus(@Param('userId') userId: string) {
+    const data = await this.followsService.getFollowersWithMutualStatus(parseInt(userId, 10));
+    return { data };
+  }
+
+  @Get('following-with-status/:userId')
+  async getFollowingWithStatus(@Param('userId') userId: string) {
+    const data = await this.followsService.getFollowingWithMutualStatus(parseInt(userId, 10));
+    return { data };
+  }
+
+  @Get('check-mutual/:userId1/:userId2')
+  async checkMutual(
+    @Param('userId1') userId1: string,
+    @Param('userId2') userId2: string,
+  ) {
+    const isMutual = await this.followsService.isMutualFollow(
+      parseInt(userId1, 10),
+      parseInt(userId2, 10),
+    );
+    return { isMutual };
+  }
 }

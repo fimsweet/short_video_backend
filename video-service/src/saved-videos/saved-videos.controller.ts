@@ -12,7 +12,9 @@ export class SavedVideosController {
 
   @Get('check/:videoId/:userId')
   async checkSaved(@Param('videoId') videoId: string, @Param('userId') userId: string) {
+    console.log(`🔍 [API] Check saved: videoId=${videoId}, userId=${userId}`);
     const saved = await this.savedVideosService.isSavedByUser(videoId, userId);
+    console.log(`✅ [API] Saved status for video ${videoId} by user ${userId}: ${saved}`);
     return { saved };
   }
 

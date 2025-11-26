@@ -28,10 +28,15 @@ export class SavedVideosService {
   }
 
   async isSavedByUser(videoId: string, userId: string): Promise<boolean> {
+    console.log(`🔍 [DB] Checking saved: videoId=${videoId}, userId=${userId}`);
+    
     const saved = await this.savedVideoRepository.findOne({
       where: { videoId, userId },
     });
-    return !!saved;
+    
+    const isSaved = !!saved;
+    console.log(`✅ [DB] Saved found: ${isSaved}`, saved ? `(id: ${saved.id})` : '');
+    return isSaved;
   }
 
   async getSavedVideos(userId: string): Promise<any[]> {
