@@ -13,30 +13,38 @@ export class SavedVideosService {
     private videosService: VideosService,
   ) {}
 
-  async toggleSave(videoId: string, userId: string): Promise<{ saved: boolean }> {
-    const existing = await this.savedVideoRepository.findOne({
+  async toggleSave(videoId: string, userId: string): Promise<{ saved: boolean; saveCount: number }> {
+    console.log(`🔄 Toggle save: videoId=${videoId}, userId=${userId}`);
+    
+    const existingSave = await this.savedVideoRepository.findOne({
       where: { videoId, userId },
     });
 
-    if (existing) {
-      await this.savedVideoRepository.remove(existing);
-      return { saved: false };
+    if (existingSave) {
+      console.log('❌ Unsave - removing existing save');
+      await this.savedVideoRepository.remove(existingSave);
+      const saveCount = await this.getSaveCount(videoId);
+      return { saved: false, saveCount };
     } else {
-      await this.savedVideoRepository.save({ videoId, userId });
-      return { saved: true };
+      console.log('🔖 Save - creating new save');
+      await this.savedVideoRepository.save({
+        videoId,
+        userId,
+      });
+      const saveCount = await this.getSaveCount(videoId);
+      return { saved: true, saveCount };
     }
   }
 
+  async getSaveCount(videoId: string): Promise<number> {
+    return this.savedVideoRepository.count({ where: { videoId } });
+  }
+
   async isSavedByUser(videoId: string, userId: string): Promise<boolean> {
-    console.log(`🔍 [DB] Checking saved: videoId=${videoId}, userId=${userId}`);
-    
-    const saved = await this.savedVideoRepository.findOne({
+    const save = await this.savedVideoRepository.findOne({
       where: { videoId, userId },
     });
-    
-    const isSaved = !!saved;
-    console.log(`✅ [DB] Saved found: ${isSaved}`, saved ? `(id: ${saved.id})` : '');
-    return isSaved;
+    return !!save;
   }
 
   async getSavedVideos(userId: string): Promise<any[]> {

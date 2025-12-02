@@ -7,8 +7,10 @@ import { Video, VideoStatus } from '../entities/video.entity';
 import { UploadVideoDto } from './dto/upload-video.dto';
 import { LikesService } from '../likes/likes.service';
 import { CommentsService } from '../comments/comments.service';
+import { SavedVideosService } from '../saved-videos/saved-videos.service';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
+import { SharesService } from '../shares/shares.service';
 
 @Injectable()
 export class VideosService {
@@ -23,6 +25,10 @@ export class VideosService {
     private likesService: LikesService,
     @Inject(forwardRef(() => CommentsService))
     private commentsService: CommentsService,
+    @Inject(forwardRef(() => SavedVideosService))
+    private savedVideosService: SavedVideosService,
+    @Inject(forwardRef(() => SharesService))
+    private sharesService: SharesService,
     private httpService: HttpService,
   ) {
     this.rabbitMQUrl = this.configService.get<string>('RABBITMQ_URL') || 'amqp://admin:password@localhost:5672';
@@ -102,16 +108,21 @@ export class VideosService {
 
     const likeCount = await this.likesService.getLikeCount(id);
     const commentCount = await this.commentsService.getCommentCount(id);
+    const saveCount = await this.savedVideosService.getSaveCount(id);
+    const shareCount = await this.sharesService.getShareCount(id);
 
     console.log(`📹 getVideoById(${id}):`);
     console.log(`   likeCount: ${likeCount}`);
     console.log(`   commentCount: ${commentCount}`);
+    console.log(`   saveCount: ${saveCount}`);
     console.log(`   thumbnailUrl: ${video.thumbnailUrl}`);
 
     return {
       ...video,
       likeCount,
       commentCount,
+      saveCount,
+      shareCount,
     };
   }
 
@@ -134,6 +145,8 @@ export class VideosService {
         videos.map(async (video) => {
           const likeCount = await this.likesService.getLikeCount(video.id);
           const commentCount = await this.commentsService.getCommentCount(video.id);
+          const saveCount = await this.savedVideosService.getSaveCount(video.id);
+          const shareCount = await this.sharesService.getShareCount(video.id);
 
           // Log thumbnail info
           console.log(`   Video ${video.id}:`);
@@ -152,6 +165,8 @@ export class VideosService {
             createdAt: video.createdAt,
             likeCount,
             commentCount,
+            saveCount,
+            shareCount,
             viewCount: 0, // TODO: Add view tracking
           };
         }),
@@ -181,13 +196,15 @@ export class VideosService {
         videos.map(async (video) => {
           const likeCount = await this.likesService.getLikeCount(video.id);
           const commentCount = await this.commentsService.getCommentCount(video.id);
-
-          console.log(`   Video ${video.id}: ${likeCount} likes, ${commentCount} comments`);
+          const saveCount = await this.savedVideosService.getSaveCount(video.id);
+          const shareCount = await this.sharesService.getShareCount(video.id);
 
           return {
             ...video,
             likeCount,
             commentCount,
+            saveCount,
+            shareCount,
           };
         }),
       );
@@ -205,7 +222,6 @@ export class VideosService {
     try {
       console.log(`📹 Fetching following videos for user ${userId}...`);
 
-      // Get list of users that current user is following from user-service
       const userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3000';
       const response = await firstValueFrom(
         this.httpService.get(`${userServiceUrl}/follows/following/${userId}`)
@@ -234,10 +250,14 @@ export class VideosService {
         videos.map(async (video) => {
           const likeCount = await this.likesService.getLikeCount(video.id);
           const commentCount = await this.commentsService.getCommentCount(video.id);
+          const saveCount = await this.savedVideosService.getSaveCount(video.id);
+          const shareCount = await this.sharesService.getShareCount(video.id);
           return {
             ...video,
             likeCount,
             commentCount,
+            saveCount,
+            shareCount,
           };
         }),
       );

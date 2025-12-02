@@ -7,6 +7,7 @@ import { CommentsModule } from './comments/comments.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { SavedVideosModule } from './saved-videos/saved-videos.module';
 import { MessagesModule } from './messages/messages.module';
+import { SharesModule } from './shares/shares.module';
 import { getDatabaseConfig } from './config/database.config';
 
 @Module({
@@ -26,6 +27,7 @@ import { getDatabaseConfig } from './config/database.config';
     NotificationsModule,
     SavedVideosModule,
     MessagesModule,
+    SharesModule,
   ],
 })
 export class AppModule {}
