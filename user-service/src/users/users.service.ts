@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateUserDto } from '../auth/dto/create-user.dto';
 import { User } from '../entities/user.entity';
+import { BlockedUser } from '../entities/blocked-user.entity';
 import * as bcrypt from 'bcrypt';
 
 @Injectable()
@@ -10,6 +11,8 @@ export class UsersService {
   constructor(
     @InjectRepository(User)
     private userRepository: Repository<User>,
+    @InjectRepository(BlockedUser)
+    private blockedUserRepository: Repository<BlockedUser>,
   ) {}
 
   async create(createUserDto: CreateUserDto) {
@@ -113,5 +116,65 @@ export class UsersService {
       console.error('❌ Error updating profile:', error);
       throw error;
     }
+  }
+
+  // Block a user
+  async blockUser(blockerId: number, blockedId: number): Promise<void> {
+    // Check if already blocked
+    const existing = await this.blockedUserRepository.findOne({
+      where: { blockerId, blockedId },
+    });
+
+    if (existing) {
+      return; // Already blocked
+    }
+
+    const blockedUser = this.blockedUserRepository.create({
+      blockerId,
+      blockedId,
+    });
+
+    await this.blockedUserRepository.save(blockedUser);
+    console.log(`✅ User ${blockerId} blocked user ${blockedId}`);
+  }
+
+  // Unblock a user
+  async unblockUser(blockerId: number, blockedId: number): Promise<void> {
+    await this.blockedUserRepository.delete({ blockerId, blockedId });
+    console.log(`✅ User ${blockerId} unblocked user ${blockedId}`);
+  }
+
+  // Get list of blocked users
+  async getBlockedUsers(userId: number): Promise<any[]> {
+    const blockedEntries = await this.blockedUserRepository.find({
+      where: { blockerId: userId },
+    });
+
+    const blockedUsers = await Promise.all(
+      blockedEntries.map(async (entry) => {
+        const user = await this.userRepository.findOne({
+          where: { id: entry.blockedId },
+        });
+        if (user) {
+          return {
+            id: user.id,
+            username: user.username,
+            avatarUrl: user.avatar,
+            blockedAt: entry.createdAt,
+          };
+        }
+        return null;
+      }),
+    );
+
+    return blockedUsers.filter((u) => u !== null);
+  }
+
+  // Check if a user is blocked
+  async isUserBlocked(blockerId: number, blockedId: number): Promise<boolean> {
+    const blocked = await this.blockedUserRepository.findOne({
+      where: { blockerId, blockedId },
+    });
+    return !!blocked;
   }
 }

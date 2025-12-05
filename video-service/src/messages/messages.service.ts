@@ -76,7 +76,14 @@ export class MessagesService {
         const unreadCount = await this.messageRepository.count({
           where: { conversationId: conv.id, recipientId: userId, isRead: false },
         });
-        return { id: conv.id, otherUserId, lastMessage: conv.lastMessage, lastMessageSenderId: conv.lastMessageSenderId, updatedAt: conv.updatedAt, unreadCount };
+        return { 
+          id: conv.id, 
+          otherUserId, 
+          lastMessage: conv.lastMessage, 
+          lastMessageSenderId: conv.lastMessageSenderId, 
+          updatedAt: conv.updatedAt ? new Date(conv.updatedAt).toISOString() : null, 
+          unreadCount 
+        };
       }),
     );
   }
@@ -90,5 +97,65 @@ export class MessagesService {
 
   async getUnreadCount(userId: string): Promise<number> {
     return this.messageRepository.count({ where: { recipientId: userId, isRead: false } });
+  }
+
+  async getConversationSettings(userId: string, recipientId: string): Promise<{ isMuted: boolean; isPinned: boolean }> {
+    const conversationId = this.getConversationId(userId, recipientId);
+    const conversation = await this.conversationRepository.findOne({
+      where: { id: conversationId },
+    });
+
+    if (!conversation) {
+      return { isMuted: false, isPinned: false };
+    }
+
+    // Check if user is participant1 or participant2 to get correct settings
+    const isParticipant1 = conversation.participant1Id === userId;
+    
+    return {
+      isMuted: isParticipant1 ? (conversation.isMutedBy1 ?? false) : (conversation.isMutedBy2 ?? false),
+      isPinned: isParticipant1 ? (conversation.isPinnedBy1 ?? false) : (conversation.isPinnedBy2 ?? false),
+    };
+  }
+
+  async updateConversationSettings(
+    userId: string,
+    recipientId: string,
+    settings: { isMuted?: boolean; isPinned?: boolean },
+  ): Promise<void> {
+    const conversationId = this.getConversationId(userId, recipientId);
+    let conversation = await this.conversationRepository.findOne({
+      where: { id: conversationId },
+    });
+
+    if (!conversation) {
+      // Create conversation if not exists
+      const sorted = [userId, recipientId].sort();
+      conversation = this.conversationRepository.create({
+        id: conversationId,
+        participant1Id: sorted[0],
+        participant2Id: sorted[1],
+      });
+    }
+
+    const isParticipant1 = conversation.participant1Id === userId;
+
+    if (settings.isMuted !== undefined) {
+      if (isParticipant1) {
+        conversation.isMutedBy1 = settings.isMuted;
+      } else {
+        conversation.isMutedBy2 = settings.isMuted;
+      }
+    }
+
+    if (settings.isPinned !== undefined) {
+      if (isParticipant1) {
+        conversation.isPinnedBy1 = settings.isPinned;
+      } else {
+        conversation.isPinnedBy2 = settings.isPinned;
+      }
+    }
+
+    await this.conversationRepository.save(conversation);
   }
 }

@@ -16,6 +16,9 @@ export class Message {
   @Column('text')
   content: string;
 
+  @Column({ type: 'simple-array', nullable: true })
+  imageUrls: string[];
+
   @Column({ type: 'boolean', default: false })
   isRead: boolean;
 

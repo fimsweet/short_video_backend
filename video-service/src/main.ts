@@ -62,6 +62,16 @@ async function bootstrap() {
     next();
   }, express.static(processedVideosPath));
 
+  // Serve chat images
+  const chatImagesPath = join(__dirname, '..', 'uploads', 'chat_images');
+  app.use('/uploads/chat_images', (req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Cross-Origin-Resource-Policy', 'cross-origin');
+    next();
+  }, express.static(chatImagesPath));
+  
+  console.log('Chat images served from:', chatImagesPath);
+
   const port = process.env.PORT || 3001;
   await app.listen(port);
   

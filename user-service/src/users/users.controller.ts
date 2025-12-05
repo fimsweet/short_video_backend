@@ -81,4 +81,47 @@ export class UsersController {
       user: updatedUser,
     };
   }
+
+  // Block a user
+  @Post('block/:targetUserId')
+  async blockUser(
+    @Body() body: { userId: string },
+    @Param('targetUserId') targetUserId: string,
+  ) {
+    // For now, userId comes from body until auth is properly set up
+    const blockerId = body.userId || '1'; // Default for testing
+    await this.usersService.blockUser(parseInt(blockerId, 10), parseInt(targetUserId, 10));
+    return { success: true, message: 'User blocked successfully' };
+  }
+
+  // Unblock a user
+  @Delete('block/:targetUserId')
+  async unblockUser(
+    @Body() body: { userId: string },
+    @Param('targetUserId') targetUserId: string,
+  ) {
+    const blockerId = body.userId || '1';
+    await this.usersService.unblockUser(parseInt(blockerId, 10), parseInt(targetUserId, 10));
+    return { success: true, message: 'User unblocked successfully' };
+  }
+
+  // Get list of blocked users
+  @Get('blocked/:userId')
+  async getBlockedUsers(@Param('userId') userId: string) {
+    const blockedUsers = await this.usersService.getBlockedUsers(parseInt(userId, 10));
+    return blockedUsers;
+  }
+
+  // Check if a user is blocked
+  @Get('blocked/:userId/check/:targetUserId')
+  async isUserBlocked(
+    @Param('userId') userId: string,
+    @Param('targetUserId') targetUserId: string,
+  ) {
+    const isBlocked = await this.usersService.isUserBlocked(
+      parseInt(userId, 10),
+      parseInt(targetUserId, 10),
+    );
+    return { isBlocked };
+  }
 }

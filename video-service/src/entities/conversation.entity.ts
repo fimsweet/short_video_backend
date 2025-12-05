@@ -19,6 +19,20 @@ export class Conversation {
   @Column({ nullable: true })
   lastMessageSenderId: string;
 
+  // Mute settings for each participant
+  @Column({ default: false })
+  isMutedBy1: boolean;
+
+  @Column({ default: false })
+  isMutedBy2: boolean;
+
+  // Pin settings for each participant
+  @Column({ default: false })
+  isPinnedBy1: boolean;
+
+  @Column({ default: false })
+  isPinnedBy2: boolean;
+
   @CreateDateColumn()
   createdAt: Date;
 
