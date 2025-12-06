@@ -63,6 +63,43 @@ export class VideosController {
     return this.videosService.getFollowingVideos(parseInt(userId, 10), 50);
   }
 
+  @Post(':id/view')
+  @HttpCode(HttpStatus.OK)
+  async incrementViewCount(@Param('id') id: string) {
+    const video = await this.videosService.incrementViewCount(id);
+    return {
+      success: true,
+      viewCount: video.viewCount,
+    };
+  }
+
+  @Post(':id/hide')
+  @HttpCode(HttpStatus.OK)
+  async toggleHideVideo(
+    @Param('id') id: string,
+    @Body('userId') userId: string,
+  ) {
+    const video = await this.videosService.toggleHideVideo(id, userId);
+    return {
+      success: true,
+      isHidden: video.isHidden,
+      message: video.isHidden ? 'Video đã được ẩn' : 'Video đã hiện thị',
+    };
+  }
+
+  @Post(':id/delete')
+  @HttpCode(HttpStatus.OK)
+  async deleteVideo(
+    @Param('id') id: string,
+    @Body('userId') userId: string,
+  ) {
+    await this.videosService.deleteVideo(id, userId);
+    return {
+      success: true,
+      message: 'Video đã được xóa',
+    };
+  }
+
   // Test endpoint to check thumbnail
   @Get('test/thumbnail/:videoId')
   async testThumbnail(@Param('videoId') videoId: string) {

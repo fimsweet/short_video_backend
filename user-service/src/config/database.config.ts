@@ -15,4 +15,6 @@ export const databaseConfig: TypeOrmModuleOptions = {
   autoLoadEntities: true,
   retryAttempts: 3,
   retryDelay: 3000,
+  timezone: 'Z', // Store and retrieve dates in UTC
+  dateStrings: false, // Return Date objects instead of strings
 };

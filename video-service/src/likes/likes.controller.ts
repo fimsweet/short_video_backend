@@ -31,4 +31,12 @@ export class LikesController {
   async getLikesByVideo(@Param('videoId') videoId: string) {
     return this.likesService.getLikesByVideo(videoId);
   }
+
+  @Get('user/:userId')
+  async getLikedVideosByUser(@Param('userId') userId: string) {
+    console.log(`📋 Get liked videos by user: ${userId}`);
+    const videos = await this.likesService.getLikedVideosByUser(userId);
+    console.log(`✅ Found ${videos.length} liked videos`);
+    return videos;
+  }
 }

@@ -70,7 +70,7 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         senderId: message.senderId,
         recipientId: message.recipientId,
         content: message.content,
-        createdAt: message.createdAt,
+        createdAt: message.createdAt instanceof Date ? message.createdAt.toISOString() : message.createdAt,
         isRead: message.isRead,
         conversationId: message.conversationId,
       };

@@ -1,13 +1,25 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Like } from '../entities/like.entity';
+import { Video } from '../entities/video.entity';
+import { CommentsService } from '../comments/comments.service';
+import { SavedVideosService } from '../saved-videos/saved-videos.service';
+import { SharesService } from '../shares/shares.service';
 
 @Injectable()
 export class LikesService {
   constructor(
     @InjectRepository(Like)
     private likeRepository: Repository<Like>,
+    @InjectRepository(Video)
+    private videoRepository: Repository<Video>,
+    @Inject(forwardRef(() => CommentsService))
+    private commentsService: CommentsService,
+    @Inject(forwardRef(() => SavedVideosService))
+    private savedVideosService: SavedVideosService,
+    @Inject(forwardRef(() => SharesService))
+    private sharesService: SharesService,
   ) {}
 
   async toggleLike(videoId: string, userId: string): Promise<{ liked: boolean; likeCount: number }> {
@@ -54,5 +66,58 @@ export class LikesService {
       where: { videoId },
       order: { createdAt: 'DESC' },
     });
+  }
+
+  async getLikedVideosByUser(userId: string): Promise<any[]> {
+    console.log(`🔍 Fetching liked videos for user: ${userId}`);
+    
+    // Get all likes by this user
+    const likes = await this.likeRepository.find({
+      where: { userId },
+      order: { createdAt: 'DESC' },
+    });
+
+    console.log(`📝 Found ${likes.length} total likes`);
+
+    if (likes.length === 0) {
+      return [];
+    }
+
+    // Get video details for each like, excluding user's own videos
+    const videoIds = likes.map(like => like.videoId);
+    const videos = await this.videoRepository
+      .createQueryBuilder('video')
+      .where('video.id IN (:...videoIds)', { videoIds })
+      .andWhere('video.userId != :userId', { userId })
+      .orderBy('video.createdAt', 'DESC')
+      .getMany();
+
+    console.log(`✅ Returning ${videos.length} videos (excluding user's own)`);
+    
+    // Add counts for each video (like, comment, save, share)
+    const videosWithCounts = await Promise.all(
+      videos.map(async (video) => {
+        const likeCount = await this.getLikeCount(video.id);
+        const commentCount = await this.commentsService.getCommentCount(video.id);
+        const saveCount = await this.savedVideosService.getSaveCount(video.id);
+        const shareCount = await this.sharesService.getShareCount(video.id);
+
+        return {
+          ...video,
+          likeCount,
+          commentCount,
+          saveCount,
+          shareCount,
+        };
+      }),
+    );
+
+    console.log(`✅ Added counts to ${videosWithCounts.length} videos`);
+    return videosWithCounts;
+  }
+
+  async deleteAllLikesForVideo(videoId: string): Promise<void> {
+    await this.likeRepository.delete({ videoId });
+    console.log(`🗑️ Deleted all likes for video ${videoId}`);
   }
 }

@@ -192,4 +192,18 @@ export class CommentsService {
     });
     return !!like;
   }
+
+  async deleteAllCommentsForVideo(videoId: string): Promise<void> {
+    // Get all comments for this video (including replies)
+    const comments = await this.commentRepository.find({ where: { videoId } });
+    
+    // Delete all comment likes for these comments
+    for (const comment of comments) {
+      await this.commentLikeRepository.delete({ commentId: comment.id });
+    }
+    
+    // Delete all comments
+    await this.commentRepository.delete({ videoId });
+    console.log(`🗑️ Deleted all comments and comment likes for video ${videoId}`);
+  }
 }

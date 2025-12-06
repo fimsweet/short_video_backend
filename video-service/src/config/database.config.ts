@@ -20,4 +20,6 @@ export const getDatabaseConfig = (configService: ConfigService): TypeOrmModuleOp
   synchronize: true,
   logging: configService.get<string>('NODE_ENV') === 'development',
   autoLoadEntities: true,
+  timezone: 'Z', // Store and retrieve dates in UTC
+  dateStrings: false, // Return Date objects instead of strings
 });

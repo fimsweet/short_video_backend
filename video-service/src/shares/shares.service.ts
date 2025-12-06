@@ -36,4 +36,9 @@ export class SharesService {
       order: { createdAt: 'DESC' },
     });
   }
+
+  async deleteAllSharesForVideo(videoId: string): Promise<void> {
+    await this.shareRepository.delete({ videoId });
+    console.log(`🗑️ Deleted all shares for video ${videoId}`);
+  }
 }

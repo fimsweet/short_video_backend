@@ -53,14 +53,22 @@ export class MessagesService {
     return this.messageRepository.save(message);
   }
 
-  async getMessages(userId1: string, userId2: string, limit: number = 50, offset: number = 0): Promise<Message[]> {
+  async getMessages(userId1: string, userId2: string, limit: number = 50, offset: number = 0): Promise<any[]> {
     const conversationId = this.getConversationId(userId1, userId2);
-    return this.messageRepository.find({
+    const messages = await this.messageRepository.find({
       where: { conversationId },
       order: { createdAt: 'DESC' },
       take: limit,
       skip: offset,
     });
+    
+    // Ensure createdAt is returned as ISO string with 'Z' suffix for UTC
+    return messages.map(message => ({
+      ...message,
+      createdAt: message.createdAt instanceof Date 
+        ? message.createdAt.toISOString() 
+        : message.createdAt,
+    }));
   }
 
   async getConversations(userId: string): Promise<any[]> {

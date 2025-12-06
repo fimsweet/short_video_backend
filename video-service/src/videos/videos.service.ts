@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as amqp from 'amqplib';
+import * as fs from 'fs';
+import * as path from 'path';
 import { Video, VideoStatus } from '../entities/video.entity';
 import { UploadVideoDto } from './dto/upload-video.dto';
 import { LikesService } from '../likes/likes.service';
@@ -126,6 +128,21 @@ export class VideosService {
     };
   }
 
+  async incrementViewCount(videoId: string): Promise<Video> {
+    const video = await this.videoRepository.findOne({ where: { id: videoId } });
+    
+    if (!video) {
+      throw new Error('Video not found');
+    }
+
+    video.viewCount = (video.viewCount || 0) + 1;
+    await this.videoRepository.save(video);
+    
+    console.log(`👁️ View count incremented for video ${videoId}: ${video.viewCount}`);
+    
+    return video;
+  }
+
   async getVideosByUserId(userId: string): Promise<any[]> {
     try {
       console.log(`📹 Fetching videos for user ${userId}...`);
@@ -133,7 +150,6 @@ export class VideosService {
       const videos = await this.videoRepository.find({
         where: { 
           userId,
-          status: VideoStatus.READY,
         },
         order: { createdAt: 'DESC' },
       });
@@ -148,10 +164,12 @@ export class VideosService {
           const saveCount = await this.savedVideosService.getSaveCount(video.id);
           const shareCount = await this.sharesService.getShareCount(video.id);
 
-          // Log thumbnail info
+          // Log video info including isHidden
           console.log(`   Video ${video.id}:`);
           console.log(`     thumbnailUrl: ${video.thumbnailUrl}`);
           console.log(`     hlsUrl: ${video.hlsUrl}`);
+          console.log(`     isHidden: ${video.isHidden}`);
+          console.log(`     status: ${video.status}`);
 
           return {
             id: video.id,
@@ -162,12 +180,13 @@ export class VideosService {
             thumbnailUrl: video.thumbnailUrl, // Make sure this is included
             aspectRatio: video.aspectRatio,
             status: video.status,
+            isHidden: video.isHidden || false, // Include isHidden flag
             createdAt: video.createdAt,
             likeCount,
             commentCount,
             saveCount,
             shareCount,
-            viewCount: 0, // TODO: Add view tracking
+            viewCount: video.viewCount || 0, // Use actual view count from database
           };
         }),
       );
@@ -184,7 +203,10 @@ export class VideosService {
       console.log(`📹 Fetching all videos (limit: ${limit})...`);
 
       const videos = await this.videoRepository.find({
-        where: { status: VideoStatus.READY },
+        where: { 
+          status: VideoStatus.READY,
+          isHidden: false, // Only show non-hidden videos
+        },
         order: { createdAt: 'DESC' },
         take: limit,
       });
@@ -234,7 +256,7 @@ export class VideosService {
         return [];
       }
 
-      // Get videos from followed users
+      // Get videos from followed users (including hidden videos - TikTok logic)
       const videos = await this.videoRepository
         .createQueryBuilder('video')
         .where('video.status = :status', { status: VideoStatus.READY })
@@ -280,5 +302,119 @@ export class VideosService {
       hlsUrl,
       errorMessage,
     });
+  }
+
+  async toggleHideVideo(videoId: string, userId: string): Promise<Video> {
+    const video = await this.videoRepository.findOne({ where: { id: videoId } });
+    
+    if (!video) {
+      throw new Error('Video not found');
+    }
+
+    if (video.userId !== userId) {
+      throw new Error('Unauthorized: You can only hide your own videos');
+    }
+
+    video.isHidden = !video.isHidden;
+    return await this.videoRepository.save(video);
+  }
+
+  async deleteVideo(videoId: string, userId: string): Promise<void> {
+    const video = await this.videoRepository.findOne({ where: { id: videoId } });
+    
+    if (!video) {
+      throw new Error('Video not found');
+    }
+
+    if (video.userId !== userId) {
+      throw new Error('Unauthorized: You can only delete your own videos');
+    }
+
+    console.log(`🗑️ Starting deletion process for video ${videoId}...`);
+
+    try {
+      // 1. Delete all related data from database
+      await Promise.all([
+        // Delete all likes
+        this.likesService.deleteAllLikesForVideo(videoId),
+        // Delete all comments
+        this.commentsService.deleteAllCommentsForVideo(videoId),
+        // Delete all saves
+        this.savedVideosService.deleteAllSavesForVideo(videoId),
+        // Delete all shares
+        this.sharesService.deleteAllSharesForVideo(videoId),
+      ]);
+
+      console.log(`✅ Deleted all related data for video ${videoId}`);
+
+      // 2. Delete processed video files (HLS segments and thumbnails)
+      // Extract folder name from hlsUrl or thumbnailUrl
+      let processedFolderName = videoId; // Default to videoId
+      
+      if (video.hlsUrl) {
+        // hlsUrl format: /uploads/processed_videos/{folder-id}/playlist.m3u8
+        const match = video.hlsUrl.match(/\/processed_videos\/([^\/]+)\//);
+        if (match && match[1]) {
+          processedFolderName = match[1];
+          console.log(`📁 Extracted folder name from hlsUrl: ${processedFolderName}`);
+        }
+      } else if (video.thumbnailUrl) {
+        // thumbnailUrl format: /uploads/processed_videos/{folder-id}/thumbnail.jpg
+        const match = video.thumbnailUrl.match(/\/processed_videos\/([^\/]+)\//);
+        if (match && match[1]) {
+          processedFolderName = match[1];
+          console.log(`📁 Extracted folder name from thumbnailUrl: ${processedFolderName}`);
+        }
+      }
+      
+      console.log(`🔍 Will delete processed videos folder: ${processedFolderName}`);
+      
+      // Use path relative to video-service directory
+      const processedVideoPath = path.resolve(__dirname, '..', '..', '..', 'video-worker-service', 'processed_videos', processedFolderName);
+      
+      console.log(`🔍 Looking for processed videos at: ${processedVideoPath}`);
+      console.log(`📂 __dirname is: ${__dirname}`);
+      
+      if (fs.existsSync(processedVideoPath)) {
+        try {
+          fs.rmSync(processedVideoPath, { recursive: true, force: true });
+          console.log(`✅ Deleted processed video files at: ${processedVideoPath}`);
+        } catch (error) {
+          console.error(`❌ Error deleting processed video folder: ${error}`);
+        }
+      } else {
+        console.log(`⚠️ Processed video folder not found at: ${processedVideoPath}`);
+        // Try alternative path (in case service is running in different directory)
+        const alternativePath = path.resolve(process.cwd(), '..', 'video-worker-service', 'processed_videos', processedFolderName);
+        console.log(`🔍 Trying alternative path: ${alternativePath}`);
+        
+        if (fs.existsSync(alternativePath)) {
+          try {
+            fs.rmSync(alternativePath, { recursive: true, force: true });
+            console.log(`✅ Deleted processed video files at: ${alternativePath}`);
+          } catch (error) {
+            console.error(`❌ Error deleting processed video folder: ${error}`);
+          }
+        } else {
+          console.log(`⚠️ Processed video folder not found at alternative path either`);
+        }
+      }
+
+      // 3. Delete raw video file if exists
+      if (video.rawVideoPath && fs.existsSync(video.rawVideoPath)) {
+        fs.unlinkSync(video.rawVideoPath);
+        console.log(`🗑️ Deleted raw video file: ${video.rawVideoPath}`);
+      } else {
+        console.log(`⚠️ Raw video file not found or already deleted: ${video.rawVideoPath}`);
+      }
+
+      // 4. Finally, delete the video record from database
+      await this.videoRepository.delete(videoId);
+      
+      console.log(`✅ Video ${videoId} completely deleted by user ${userId}`);
+    } catch (error) {
+      console.error(`❌ Error deleting video ${videoId}:`, error);
+      throw error; // Throw original error with details
+    }
   }
 }

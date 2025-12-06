@@ -81,4 +81,9 @@ export class SavedVideosService {
     
     return validVideos;
   }
+
+  async deleteAllSavesForVideo(videoId: string): Promise<void> {
+    await this.savedVideoRepository.delete({ videoId });
+    console.log(`🗑️ Deleted all saves for video ${videoId}`);
+  }
 }

@@ -44,6 +44,12 @@ export class Video {
   @Column({ nullable: true })
   aspectRatio: string; // e.g., "9:16" for TikTok-style videos
 
+  @Column({ type: 'int', default: 0 })
+  viewCount: number; // Số lượt xem video
+
+  @Column({ type: 'boolean', default: false })
+  isHidden: boolean; // Ẩn video khỏi feed công khai
+
   @Column({
     type: 'enum',
     enum: VideoStatus,
