@@ -4,6 +4,7 @@ import { HttpModule } from '@nestjs/axios';
 import { Video } from '../entities/video.entity';
 import { VideosService } from './videos.service';
 import { VideosController } from './videos.controller';
+import { ChunkedUploadService } from './chunked-upload.service';
 import { LikesModule } from '../likes/likes.module';
 import { CommentsModule } from '../comments/comments.module';
 import { SavedVideosModule } from '../saved-videos/saved-videos.module';
@@ -19,7 +20,7 @@ import { SharesModule } from '../shares/shares.module';
     forwardRef(() => SharesModule),
   ],
   controllers: [VideosController],
-  providers: [VideosService],
+  providers: [VideosService, ChunkedUploadService],
   exports: [VideosService],
 })
 export class VideosModule {}

@@ -1,9 +1,11 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateUserDto } from '../auth/dto/create-user.dto';
 import { User } from '../entities/user.entity';
 import { BlockedUser } from '../entities/blocked-user.entity';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import * as bcrypt from 'bcrypt';
 
 @Injectable()
@@ -13,6 +15,8 @@ export class UsersService {
     private userRepository: Repository<User>,
     @InjectRepository(BlockedUser)
     private blockedUserRepository: Repository<BlockedUser>,
+    @Inject(CACHE_MANAGER)
+    private cacheManager: Cache,
   ) {}
 
   async create(createUserDto: CreateUserDto) {
@@ -48,15 +52,51 @@ export class UsersService {
   }
 
   async findOne(username: string): Promise<User | null> {
-    return this.userRepository.findOne({
+    // ✅ Check cache first
+    const cacheKey = `user:username:${username}`;
+    const cachedUser = await this.cacheManager.get<User>(cacheKey);
+    
+    if (cachedUser) {
+      console.log(`✅ Cache HIT for username ${username}`);
+      return cachedUser;
+    }
+    
+    console.log(`⚠️ Cache MISS for username ${username} - fetching from DB`);
+    const user = await this.userRepository.findOne({
       where: { username }
     });
+    
+    if (user) {
+      // ✅ Store in cache for 10 minutes (user data rarely changes)
+      await this.cacheManager.set(cacheKey, user, 600000);
+    }
+    
+    return user;
   }
 
   async findById(id: number): Promise<User | null> {
-    return this.userRepository.findOne({
+    // ✅ Check cache first
+    const cacheKey = `user:id:${id}`;
+    const cachedUser = await this.cacheManager.get<User>(cacheKey);
+    
+    if (cachedUser) {
+      console.log(`✅ Cache HIT for user ID ${id}`);
+      return cachedUser;
+    }
+    
+    console.log(`⚠️ Cache MISS for user ID ${id} - fetching from DB`);
+    const user = await this.userRepository.findOne({
       where: { id }
     });
+    
+    if (user) {
+      // ✅ Store in cache for 10 minutes
+      await this.cacheManager.set(cacheKey, user, 600000);
+      // ✅ Also cache by username for faster lookup
+      await this.cacheManager.set(`user:username:${user.username}`, user, 600000);
+    }
+    
+    return user;
   }
 
   async findByEmail(email: string): Promise<User | null> {
@@ -72,7 +112,13 @@ export class UsersService {
     }
 
     user.avatar = avatarPath;
-    return await this.userRepository.save(user);
+    const updatedUser = await this.userRepository.save(user);
+    
+    // ✅ Invalidate cache
+    await this.cacheManager.del(`user:id:${userId}`);
+    await this.cacheManager.del(`user:username:${user.username}`);
+    
+    return updatedUser;
   }
 
   async removeAvatar(userId: number): Promise<User> {
@@ -82,7 +128,13 @@ export class UsersService {
     }
 
     user.avatar = null;
-    return await this.userRepository.save(user);
+    const updatedUser = await this.userRepository.save(user);
+    
+    // ✅ Invalidate cache
+    await this.cacheManager.del(`user:id:${userId}`);
+    await this.cacheManager.del(`user:username:${user.username}`);
+    
+    return updatedUser;
   }
 
   async updateProfile(userId: number, updateData: { bio?: string; avatar?: string }) {
@@ -104,6 +156,11 @@ export class UsersService {
 
       const updatedUser = await this.userRepository.save(user);
       console.log(`✅ Profile updated for user ${userId}`);
+
+      // ✅ Invalidate cache when user data changes
+      await this.cacheManager.del(`user:id:${userId}`);
+      await this.cacheManager.del(`user:username:${updatedUser.username}`);
+      console.log(`🗑️ Cache invalidated for user ${userId}`);
 
       return {
         id: updatedUser.id,

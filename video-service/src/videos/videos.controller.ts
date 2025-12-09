@@ -14,10 +14,15 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { VideosService } from './videos.service';
 import { UploadVideoDto } from './dto/upload-video.dto';
 import { multerConfig } from '../config/multer.config';
+import { ChunkedUploadService } from './chunked-upload.service';
+import { InitChunkedUploadDto, UploadChunkDto, CompleteChunkedUploadDto } from './dto/chunk-upload.dto';
 
 @Controller('videos')
 export class VideosController {
-  constructor(private readonly videosService: VideosService) {}
+  constructor(
+    private readonly videosService: VideosService,
+    private readonly chunkedUploadService: ChunkedUploadService,
+  ) {}
 
   @Post('upload')
   @HttpCode(HttpStatus.ACCEPTED) // 202 - giống POC
@@ -111,6 +116,89 @@ export class VideosController {
       fullThumbnailUrl: video?.thumbnailUrl
         ? `http://localhost:3002${video.thumbnailUrl}`
         : null,
+    };
+  }
+
+  // ==================== CHUNKED UPLOAD ENDPOINTS ====================
+
+  @Post('chunked-upload/init')
+  @HttpCode(HttpStatus.OK)
+  async initChunkedUpload(@Body() dto: InitChunkedUploadDto) {
+    const uploadId = this.chunkedUploadService.initUpload(
+      dto.fileName,
+      dto.fileSize,
+      dto.totalChunks,
+      dto.userId,
+      dto.title,
+      dto.description,
+    );
+
+    return {
+      success: true,
+      uploadId,
+      message: 'Chunked upload session initialized',
+    };
+  }
+
+  @Post('chunked-upload/chunk')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('chunk'))
+  async uploadChunk(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: UploadChunkDto,
+  ) {
+    if (!file) {
+      throw new BadRequestException('No chunk uploaded');
+    }
+
+    const result = await this.chunkedUploadService.uploadChunk(
+      dto.uploadId,
+      parseInt(dto.chunkIndex as any),
+      file.buffer,
+    );
+
+    return {
+      success: true,
+      uploadedChunks: result.uploadedChunks,
+      totalChunks: result.totalChunks,
+      progress: ((result.uploadedChunks / result.totalChunks) * 100).toFixed(2),
+    };
+  }
+
+  @Post('chunked-upload/complete')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async completeChunkedUpload(@Body() dto: CompleteChunkedUploadDto) {
+    const { filePath, fileName, metadata } = await this.chunkedUploadService.completeUpload(dto.uploadId);
+
+    // Create video record and queue for processing
+    const video = await this.videosService.uploadVideo(
+      {
+        userId: metadata.userId,
+        title: metadata.title,
+        description: metadata.description,
+      },
+      {
+        filename: fileName,
+        path: filePath,
+        size: 0, // Will be calculated
+      } as any,
+    );
+
+    return {
+      success: true,
+      message: 'Video received and is being processed',
+      videoId: video.id,
+      status: video.status,
+    };
+  }
+
+  @Get('chunked-upload/status/:uploadId')
+  async getChunkedUploadStatus(@Param('uploadId') uploadId: string) {
+    const status = this.chunkedUploadService.getUploadStatus(uploadId);
+    return {
+      success: true,
+      ...status,
+      progress: ((status.uploadedChunks / status.totalChunks) * 100).toFixed(2),
     };
   }
 }

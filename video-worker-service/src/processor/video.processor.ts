@@ -44,21 +44,30 @@ export class VideoProcessorService implements OnModuleInit {
       const channel = await connection.createChannel();
 
       await channel.assertQueue(this.queueName, { durable: true });
-      channel.prefetch(1); // Chỉ xử lý 1 video tại một thời điểm
+      
+      // ✅ MULTIPLE WORKERS: Xử lý đồng thời nhiều video
+      // Development: 2-3 videos, Production: 3-5 videos (tùy CPU cores)
+      const concurrentJobs = parseInt(this.configService.get<string>('WORKER_CONCURRENCY') || '3', 10);
+      channel.prefetch(concurrentJobs);
+      
+      console.log(`⚡ Worker configured to process ${concurrentJobs} videos concurrently`);
 
-      channel.consume(this.queueName, async (msg) => {
+      // ✅ TRUE PARALLEL PROCESSING: Fire-and-forget pattern
+      channel.consume(this.queueName, (msg) => {
         if (msg !== null) {
-          try {
-            const job = JSON.parse(msg.content.toString());
-            console.log(`[+] Received job:`, job);
+          const job = JSON.parse(msg.content.toString());
+          console.log(`[+] Received job:`, job);
 
-            await this.processVideo(job);
-
-            channel.ack(msg); // Xác nhận đã xử lý xong
-          } catch (error) {
-            console.error('[-] Failed to process message:', error);
-            channel.nack(msg, false, false); // Không retry
-          }
+          // ✅ Process without blocking - multiple videos at once
+          this.processVideo(job)
+            .then(() => {
+              channel.ack(msg); // Xác nhận đã xử lý xong
+              console.log(`[✓] Job ${job.videoId} completed and acknowledged`);
+            })
+            .catch((error) => {
+              console.error(`[-] Failed to process job ${job.videoId}:`, error);
+              channel.nack(msg, false, false); // Không retry
+            });
         }
       });
     } catch (error) {
@@ -197,8 +206,7 @@ export class VideoProcessorService implements OnModuleInit {
           '-g 48',
           '-keyint_min 48',
           
-          // Smart scaling: only crop portrait videos to 9:16
-          // Keep landscape videos as-is (with letterbox)
+
           "-vf scale='if(gt(iw/ih,9/16),1080,-2)':'if(gt(iw/ih,9/16),-2,1920)':flags=lanczos",
           
           '-hls_time 10',

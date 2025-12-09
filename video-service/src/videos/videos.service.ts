@@ -2,6 +2,8 @@ import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import * as amqp from 'amqplib';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -23,6 +25,8 @@ export class VideosService {
     @InjectRepository(Video)
     private videoRepository: Repository<Video>,
     private configService: ConfigService,
+    @Inject(CACHE_MANAGER)
+    private cacheManager: Cache,
     @Inject(forwardRef(() => LikesService))
     private likesService: LikesService,
     @Inject(forwardRef(() => CommentsService))
@@ -105,6 +109,17 @@ export class VideosService {
   }
 
   async getVideoById(id: string): Promise<any> {
+    // ✅ Check cache first
+    const cacheKey = `video:${id}`;
+    const cachedVideo = await this.cacheManager.get(cacheKey);
+    
+    if (cachedVideo) {
+      console.log(`✅ Cache HIT for video ${id}`);
+      return cachedVideo;
+    }
+    
+    console.log(`⚠️ Cache MISS for video ${id} - fetching from DB`);
+
     const video = await this.videoRepository.findOne({ where: { id } });
     if (!video) return null;
 
@@ -119,13 +134,18 @@ export class VideosService {
     console.log(`   saveCount: ${saveCount}`);
     console.log(`   thumbnailUrl: ${video.thumbnailUrl}`);
 
-    return {
+    const result = {
       ...video,
       likeCount,
       commentCount,
       saveCount,
       shareCount,
     };
+
+    // ✅ Store in cache for 5 minutes
+    await this.cacheManager.set(cacheKey, result, 300000);
+    
+    return result;
   }
 
   async incrementViewCount(videoId: string): Promise<Video> {
@@ -138,6 +158,9 @@ export class VideosService {
     video.viewCount = (video.viewCount || 0) + 1;
     await this.videoRepository.save(video);
     
+    // ✅ Invalidate cache when video data changes
+    await this.cacheManager.del(`video:${videoId}`);
+    
     console.log(`👁️ View count incremented for video ${videoId}: ${video.viewCount}`);
     
     return video;
@@ -145,6 +168,16 @@ export class VideosService {
 
   async getVideosByUserId(userId: string): Promise<any[]> {
     try {
+      // ✅ Check cache first
+      const cacheKey = `user_videos:${userId}`;
+      const cachedVideos = await this.cacheManager.get(cacheKey);
+      
+      if (cachedVideos) {
+        console.log(`✅ Cache HIT for user ${userId} videos`);
+        return cachedVideos as any[];
+      }
+      
+      console.log(`⚠️ Cache MISS for user ${userId} videos - fetching from DB`);
       console.log(`📹 Fetching videos for user ${userId}...`);
 
       const videos = await this.videoRepository.find({
@@ -191,6 +224,9 @@ export class VideosService {
         }),
       );
 
+      // ✅ Store in cache for 2 minutes (user videos change less frequently)
+      await this.cacheManager.set(cacheKey, videosWithCounts, 120000);
+      
       return videosWithCounts;
     } catch (error) {
       console.error('❌ Error in getVideosByUserId:', error);
@@ -200,6 +236,16 @@ export class VideosService {
 
   async getAllVideos(limit: number = 50): Promise<any[]> {
     try {
+      // ✅ Check cache first
+      const cacheKey = `all_videos:${limit}`;
+      const cachedVideos = await this.cacheManager.get(cacheKey);
+      
+      if (cachedVideos) {
+        console.log(`✅ Cache HIT for all videos (limit: ${limit})`);
+        return cachedVideos as any[];
+      }
+      
+      console.log(`⚠️ Cache MISS for all videos - fetching from DB`);
       console.log(`📹 Fetching all videos (limit: ${limit})...`);
 
       const videos = await this.videoRepository.find({
@@ -232,6 +278,10 @@ export class VideosService {
       );
 
       console.log(`📤 Returning ${videosWithCounts.length} videos with counts`);
+      
+      // ✅ Store in cache for 1 minute (feed changes frequently)
+      await this.cacheManager.set(cacheKey, videosWithCounts, 60000);
+      
       return videosWithCounts;
     } catch (error) {
       console.error('❌ Error in getAllVideos:', error);
@@ -302,6 +352,9 @@ export class VideosService {
       hlsUrl,
       errorMessage,
     });
+    
+    // ✅ Invalidate cache when video status changes
+    await this.cacheManager.del(`video:${videoId}`);
   }
 
   async toggleHideVideo(videoId: string, userId: string): Promise<Video> {
@@ -316,7 +369,13 @@ export class VideosService {
     }
 
     video.isHidden = !video.isHidden;
-    return await this.videoRepository.save(video);
+    const result = await this.videoRepository.save(video);
+    
+    // ✅ Invalidate caches
+    await this.cacheManager.del(`video:${videoId}`);
+    await this.cacheManager.del(`user_videos:${userId}`);
+    
+    return result;
   }
 
   async deleteVideo(videoId: string, userId: string): Promise<void> {
@@ -410,6 +469,13 @@ export class VideosService {
 
       // 4. Finally, delete the video record from database
       await this.videoRepository.delete(videoId);
+      
+      // ✅ Invalidate all related caches
+      await this.cacheManager.del(`video:${videoId}`);
+      await this.cacheManager.del(`user_videos:${userId}`);
+      // Clear common feed cache keys
+      await this.cacheManager.del('all_videos:50');
+      await this.cacheManager.del('all_videos:100');
       
       console.log(`✅ Video ${videoId} completely deleted by user ${userId}`);
     } catch (error) {

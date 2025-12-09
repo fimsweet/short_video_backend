@@ -7,6 +7,8 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { databaseConfig } from './config/database.config';
 import { FollowsModule } from './follows/follows.module';
+import { RedisCacheModule } from './config/redis-cache.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -15,6 +17,8 @@ import { FollowsModule } from './follows/follows.module';
       envFilePath: '.env',
     }),
     TypeOrmModule.forRoot(databaseConfig),
+    RedisCacheModule, // ✅ Redis cache global
+    HealthModule, // ✅ Health check endpoints
     AuthModule,
     UsersModule,
     FollowsModule,

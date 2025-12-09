@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { RedisCacheModule } from './config/redis-cache.module';
+import { HealthModule } from './health/health.module';
 import { VideosModule } from './videos/videos.module';
 import { LikesModule } from './likes/likes.module';
 import { CommentsModule } from './comments/comments.module';
@@ -21,6 +23,8 @@ import { getDatabaseConfig } from './config/database.config';
       useFactory: getDatabaseConfig,
       inject: [ConfigService],
     }),
+    RedisCacheModule, // Redis cache global
+    HealthModule, // Health check endpoints
     VideosModule,
     LikesModule,
     CommentsModule,
