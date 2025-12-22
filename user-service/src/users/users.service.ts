@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import { CreateUserDto } from '../auth/dto/create-user.dto';
 import { User } from '../entities/user.entity';
 import { BlockedUser } from '../entities/blocked-user.entity';
+import { UserSettings } from '../entities/user-settings.entity';
+import { UpdateUserSettingsDto } from './dto/update-user-settings.dto';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import * as bcrypt from 'bcrypt';
@@ -15,6 +17,8 @@ export class UsersService {
     private userRepository: Repository<User>,
     @InjectRepository(BlockedUser)
     private blockedUserRepository: Repository<BlockedUser>,
+    @InjectRepository(UserSettings)
+    private userSettingsRepository: Repository<UserSettings>,
     @Inject(CACHE_MANAGER)
     private cacheManager: Cache,
   ) {}
@@ -233,5 +237,76 @@ export class UsersService {
       where: { blockerId, blockedId },
     });
     return !!blocked;
+  }
+
+  // ============= USER SETTINGS METHODS =============
+
+  // Get user settings
+  async getUserSettings(userId: number): Promise<UserSettings> {
+    // Check cache first
+    const cacheKey = `user:settings:${userId}`;
+    const cachedSettings = await this.cacheManager.get<UserSettings>(cacheKey);
+    
+    if (cachedSettings) {
+      console.log(`✅ Cache HIT for user settings ${userId}`);
+      return cachedSettings;
+    }
+
+    console.log(`⚠️ Cache MISS for user settings ${userId} - fetching from DB`);
+    let settings = await this.userSettingsRepository.findOne({
+      where: { userId },
+    });
+
+    // If settings don't exist, create default settings
+    if (!settings) {
+      console.log(`🆕 Creating default settings for user ${userId}`);
+      settings = this.userSettingsRepository.create({
+        userId,
+        theme: 'dark',
+        notificationsEnabled: true,
+        pushNotifications: true,
+        emailNotifications: true,
+        accountPrivacy: 'public',
+        showOnlineStatus: true,
+        autoplayVideos: true,
+        videoQuality: 'medium',
+        language: 'vi',
+      });
+      settings = await this.userSettingsRepository.save(settings);
+    }
+
+    // Cache for 30 minutes
+    await this.cacheManager.set(cacheKey, settings, 1800000);
+    
+    return settings;
+  }
+
+  // Update user settings
+  async updateUserSettings(
+    userId: number,
+    updateData: UpdateUserSettingsDto,
+  ): Promise<UserSettings> {
+    let settings = await this.userSettingsRepository.findOne({
+      where: { userId },
+    });
+
+    if (!settings) {
+      // Create new settings if they don't exist
+      settings = this.userSettingsRepository.create({
+        userId,
+        ...updateData,
+      });
+    } else {
+      // Update existing settings
+      Object.assign(settings, updateData);
+    }
+
+    const updatedSettings = await this.userSettingsRepository.save(settings);
+    
+    // Invalidate cache
+    await this.cacheManager.del(`user:settings:${userId}`);
+    console.log(`✅ Settings updated for user ${userId}`, updateData);
+
+    return updatedSettings;
   }
 }

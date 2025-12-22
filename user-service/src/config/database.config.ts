@@ -1,6 +1,8 @@
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { User } from '../entities/user.entity';
 import { Follow } from '../entities/follow.entity';
+import { BlockedUser } from '../entities/blocked-user.entity';
+import { UserSettings } from '../entities/user-settings.entity';
 
 export const databaseConfig: TypeOrmModuleOptions = {
   type: 'mysql',
@@ -9,7 +11,7 @@ export const databaseConfig: TypeOrmModuleOptions = {
   username: process.env.DB_USERNAME || 'admin',
   password: process.env.DB_PASSWORD || 'password',
   database: process.env.DB_NAME || 'short_video_db',
-  entities: [User, Follow],
+  entities: [User, Follow, BlockedUser, UserSettings],
   synchronize: true, // Set to true for development only
   logging: process.env.NODE_ENV === 'development',
   autoLoadEntities: true,

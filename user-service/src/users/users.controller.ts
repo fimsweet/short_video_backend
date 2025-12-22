@@ -16,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UsersService } from './users.service';
+import { UpdateUserSettingsDto } from './dto/update-user-settings.dto';
 import { multerConfig } from '../config/multer.config';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
@@ -123,5 +124,35 @@ export class UsersController {
       parseInt(targetUserId, 10),
     );
     return { isBlocked };
+  }
+
+  // ============= USER SETTINGS ENDPOINTS =============
+
+  // Get user settings
+  @UseGuards(JwtAuthGuard)
+  @Get('settings')
+  async getUserSettings(@Request() req) {
+    const userId = req.user.userId;
+    const settings = await this.usersService.getUserSettings(userId);
+    return {
+      success: true,
+      settings,
+    };
+  }
+
+  // Update user settings
+  @UseGuards(JwtAuthGuard)
+  @Put('settings')
+  async updateUserSettings(
+    @Request() req,
+    @Body() updateData: UpdateUserSettingsDto,
+  ) {
+    const userId = req.user.userId;
+    const settings = await this.usersService.updateUserSettings(userId, updateData);
+    return {
+      success: true,
+      message: 'Settings updated successfully',
+      settings,
+    };
   }
 }
