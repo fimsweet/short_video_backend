@@ -8,6 +8,13 @@ import * as express from 'express';
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   
+  // Add global request logger
+  app.use((req, res, next) => {
+    console.log(`📨 [${new Date().toISOString()}] ${req.method} ${req.url}`);
+    console.log(`   Headers:`, req.headers);
+    next();
+  });
+  
   // Serve static files với CORS headers
   const uploadsPath = join(__dirname, '..', 'uploads');
   console.log('Serving static files from:', uploadsPath);

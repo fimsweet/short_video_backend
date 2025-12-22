@@ -24,6 +24,45 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
+  // ============= USER SETTINGS ENDPOINTS (MUST BE BEFORE :username) =============
+
+  // Get user settings
+  @UseGuards(JwtAuthGuard)
+  @Get('settings')
+  async getUserSettings(@Request() req) {
+    console.log('📥 GET /users/settings called');
+    console.log('   Request headers:', req.headers);
+    console.log('   User from JWT:', req.user);
+    
+    const userId = req.user.userId;
+    console.log(`   Fetching settings for userId: ${userId}`);
+    
+    const settings = await this.usersService.getUserSettings(userId);
+    console.log(`📤 Returning settings for userId ${userId}:`, settings);
+    return {
+      success: true,
+      settings,
+    };
+  }
+
+  // Update user settings
+  @UseGuards(JwtAuthGuard)
+  @Put('settings')
+  async updateUserSettings(
+    @Request() req,
+    @Body() updateData: UpdateUserSettingsDto,
+  ) {
+    const userId = req.user.userId;
+    const settings = await this.usersService.updateUserSettings(userId, updateData);
+    return {
+      success: true,
+      message: 'Settings updated successfully',
+      settings,
+    };
+  }
+
+  // ============= USER ENDPOINTS =============
+
   @Get('id/:userId')
   async findById(@Param('userId') userId: string) {
     const user = await this.usersService.findById(parseInt(userId, 10));
@@ -124,35 +163,5 @@ export class UsersController {
       parseInt(targetUserId, 10),
     );
     return { isBlocked };
-  }
-
-  // ============= USER SETTINGS ENDPOINTS =============
-
-  // Get user settings
-  @UseGuards(JwtAuthGuard)
-  @Get('settings')
-  async getUserSettings(@Request() req) {
-    const userId = req.user.userId;
-    const settings = await this.usersService.getUserSettings(userId);
-    return {
-      success: true,
-      settings,
-    };
-  }
-
-  // Update user settings
-  @UseGuards(JwtAuthGuard)
-  @Put('settings')
-  async updateUserSettings(
-    @Request() req,
-    @Body() updateData: UpdateUserSettingsDto,
-  ) {
-    const userId = req.user.userId;
-    const settings = await this.usersService.updateUserSettings(userId, updateData);
-    return {
-      success: true,
-      message: 'Settings updated successfully',
-      settings,
-    };
   }
 }

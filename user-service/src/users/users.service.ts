@@ -245,10 +245,11 @@ export class UsersService {
   async getUserSettings(userId: number): Promise<UserSettings> {
     // Check cache first
     const cacheKey = `user:settings:${userId}`;
+    console.log(`🔍 Checking cache for user settings ${userId} with key: ${cacheKey}`);
     const cachedSettings = await this.cacheManager.get<UserSettings>(cacheKey);
     
     if (cachedSettings) {
-      console.log(`✅ Cache HIT for user settings ${userId}`);
+      console.log(`✅ Cache HIT for user settings ${userId}:`, cachedSettings);
       return cachedSettings;
     }
 
@@ -273,10 +274,14 @@ export class UsersService {
         language: 'vi',
       });
       settings = await this.userSettingsRepository.save(settings);
+      console.log(`✅ Default settings created for user ${userId}:`, settings);
+    } else {
+      console.log(`✅ Settings loaded from DB for user ${userId}:`, settings);
     }
 
     // Cache for 30 minutes
     await this.cacheManager.set(cacheKey, settings, 1800000);
+    console.log(`💾 Settings cached for user ${userId} with key: ${cacheKey}`);
     
     return settings;
   }
@@ -291,14 +296,25 @@ export class UsersService {
     });
 
     if (!settings) {
-      // Create new settings if they don't exist
+      // Create new settings if they don't exist with default values + updates
       settings = this.userSettingsRepository.create({
-        userId,
-        ...updateData,
+        userId: userId,
+        theme: updateData.theme ?? 'dark',
+        notificationsEnabled: updateData.notificationsEnabled ?? true,
+        pushNotifications: updateData.pushNotifications ?? true,
+        emailNotifications: updateData.emailNotifications ?? true,
+        accountPrivacy: updateData.accountPrivacy ?? 'public',
+        showOnlineStatus: updateData.showOnlineStatus ?? true,
+        autoplayVideos: updateData.autoplayVideos ?? true,
+        videoQuality: updateData.videoQuality ?? 'medium',
+        language: updateData.language ?? 'vi',
+        timezone: updateData.timezone,
       });
+      console.log(`🆕 Creating new settings for user ${userId}`);
     } else {
       // Update existing settings
       Object.assign(settings, updateData);
+      console.log(`📝 Updating existing settings for user ${userId}`);
     }
 
     const updatedSettings = await this.userSettingsRepository.save(settings);
