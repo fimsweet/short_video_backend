@@ -9,4 +9,10 @@ export class UpdateUserSettingsDto {
   videoQuality?: string;
   language?: string;
   timezone?: string;
+
+  // New privacy settings
+  whoCanViewVideos?: string;
+  whoCanSendMessages?: string;
+  whoCanComment?: string;
+  filterComments?: boolean;
 }

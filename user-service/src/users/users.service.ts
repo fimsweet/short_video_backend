@@ -21,7 +21,7 @@ export class UsersService {
     private userSettingsRepository: Repository<UserSettings>,
     @Inject(CACHE_MANAGER)
     private cacheManager: Cache,
-  ) {}
+  ) { }
 
   async create(createUserDto: CreateUserDto) {
     // Check if user already exists
@@ -59,22 +59,22 @@ export class UsersService {
     // ✅ Check cache first
     const cacheKey = `user:username:${username}`;
     const cachedUser = await this.cacheManager.get<User>(cacheKey);
-    
+
     if (cachedUser) {
       console.log(`✅ Cache HIT for username ${username}`);
       return cachedUser;
     }
-    
+
     console.log(`⚠️ Cache MISS for username ${username} - fetching from DB`);
     const user = await this.userRepository.findOne({
       where: { username }
     });
-    
+
     if (user) {
       // ✅ Store in cache for 10 minutes (user data rarely changes)
       await this.cacheManager.set(cacheKey, user, 600000);
     }
-    
+
     return user;
   }
 
@@ -82,24 +82,24 @@ export class UsersService {
     // ✅ Check cache first
     const cacheKey = `user:id:${id}`;
     const cachedUser = await this.cacheManager.get<User>(cacheKey);
-    
+
     if (cachedUser) {
       console.log(`✅ Cache HIT for user ID ${id}`);
       return cachedUser;
     }
-    
+
     console.log(`⚠️ Cache MISS for user ID ${id} - fetching from DB`);
     const user = await this.userRepository.findOne({
       where: { id }
     });
-    
+
     if (user) {
       // ✅ Store in cache for 10 minutes
       await this.cacheManager.set(cacheKey, user, 600000);
       // ✅ Also cache by username for faster lookup
       await this.cacheManager.set(`user:username:${user.username}`, user, 600000);
     }
-    
+
     return user;
   }
 
@@ -117,11 +117,11 @@ export class UsersService {
 
     user.avatar = avatarPath;
     const updatedUser = await this.userRepository.save(user);
-    
+
     // ✅ Invalidate cache
     await this.cacheManager.del(`user:id:${userId}`);
     await this.cacheManager.del(`user:username:${user.username}`);
-    
+
     return updatedUser;
   }
 
@@ -133,15 +133,15 @@ export class UsersService {
 
     user.avatar = null;
     const updatedUser = await this.userRepository.save(user);
-    
+
     // ✅ Invalidate cache
     await this.cacheManager.del(`user:id:${userId}`);
     await this.cacheManager.del(`user:username:${user.username}`);
-    
+
     return updatedUser;
   }
 
-  async updateProfile(userId: number, updateData: { bio?: string; avatar?: string }) {
+  async updateProfile(userId: number, updateData: { bio?: string; avatar?: string; website?: string; location?: string; gender?: string }) {
     try {
       console.log(`📝 Updating profile for user ${userId}`, updateData);
 
@@ -158,6 +158,18 @@ export class UsersService {
         user.avatar = updateData.avatar;
       }
 
+      if (updateData.website !== undefined) {
+        user.website = updateData.website;
+      }
+
+      if (updateData.location !== undefined) {
+        user.location = updateData.location;
+      }
+
+      if (updateData.gender !== undefined) {
+        user.gender = updateData.gender;
+      }
+
       const updatedUser = await this.userRepository.save(user);
       console.log(`✅ Profile updated for user ${userId}`);
 
@@ -172,10 +184,47 @@ export class UsersService {
         email: updatedUser.email,
         avatar: updatedUser.avatar,
         bio: updatedUser.bio,
+        website: updatedUser.website,
+        location: updatedUser.location,
+        gender: updatedUser.gender,
       };
     } catch (error) {
       console.error('❌ Error updating profile:', error);
       throw error;
+    }
+  }
+
+  // Change password
+  async changePassword(userId: number, currentPassword: string, newPassword: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) {
+        return { success: false, message: 'Không tìm thấy người dùng' };
+      }
+
+      // Verify current password
+      const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
+      if (!isPasswordValid) {
+        return { success: false, message: 'Mật khẩu hiện tại không đúng' };
+      }
+
+      // Hash new password
+      const saltRounds = 10;
+      const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+      // Update password
+      user.password = hashedPassword;
+      await this.userRepository.save(user);
+
+      // Invalidate cache
+      await this.cacheManager.del(`user:id:${userId}`);
+      await this.cacheManager.del(`user:username:${user.username}`);
+
+      console.log(`✅ Password changed for user ${userId}`);
+      return { success: true, message: 'Đổi mật khẩu thành công' };
+    } catch (error) {
+      console.error('❌ Error changing password:', error);
+      return { success: false, message: 'Lỗi khi đổi mật khẩu' };
     }
   }
 
@@ -247,7 +296,7 @@ export class UsersService {
     const cacheKey = `user:settings:${userId}`;
     console.log(`🔍 Checking cache for user settings ${userId} with key: ${cacheKey}`);
     const cachedSettings = await this.cacheManager.get<UserSettings>(cacheKey);
-    
+
     if (cachedSettings) {
       console.log(`✅ Cache HIT for user settings ${userId}:`, cachedSettings);
       return cachedSettings;
@@ -282,7 +331,7 @@ export class UsersService {
     // Cache for 30 minutes
     await this.cacheManager.set(cacheKey, settings, 1800000);
     console.log(`💾 Settings cached for user ${userId} with key: ${cacheKey}`);
-    
+
     return settings;
   }
 
@@ -318,7 +367,7 @@ export class UsersService {
     }
 
     const updatedSettings = await this.userSettingsRepository.save(settings);
-    
+
     // Invalidate cache
     await this.cacheManager.del(`user:settings:${userId}`);
     console.log(`✅ Settings updated for user ${userId}`, updateData);

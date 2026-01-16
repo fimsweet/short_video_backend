@@ -20,6 +20,15 @@ export class User {
   @Column({ nullable: true, type: 'text' })
   bio: string | null;
 
+  @Column({ nullable: true, type: 'varchar', length: 255 })
+  website: string | null;
+
+  @Column({ nullable: true, type: 'varchar', length: 255 })
+  location: string | null;
+
+  @Column({ nullable: true, type: 'varchar', length: 50 })
+  gender: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

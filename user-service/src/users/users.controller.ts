@@ -22,7 +22,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(private readonly usersService: UsersService) { }
 
   // ============= USER SETTINGS ENDPOINTS (MUST BE BEFORE :username) =============
 
@@ -33,10 +33,10 @@ export class UsersController {
     console.log('📥 GET /users/settings called');
     console.log('   Request headers:', req.headers);
     console.log('   User from JWT:', req.user);
-    
+
     const userId = req.user.userId;
     console.log(`   Fetching settings for userId: ${userId}`);
-    
+
     const settings = await this.usersService.getUserSettings(userId);
     console.log(`📤 Returning settings for userId ${userId}:`, settings);
     return {
@@ -112,7 +112,7 @@ export class UsersController {
 
   @Put('profile')
   @UseGuards(JwtAuthGuard)
-  async updateProfile(@Request() req, @Body() updateData: { bio?: string }) {
+  async updateProfile(@Request() req, @Body() updateData: { bio?: string; website?: string; location?: string; gender?: string }) {
     const userId = req.user.userId;
     const updatedUser = await this.usersService.updateProfile(userId, updateData);
     return {
@@ -120,6 +120,22 @@ export class UsersController {
       message: 'Profile updated successfully',
       user: updatedUser,
     };
+  }
+
+  // Change password
+  @Put('change-password')
+  @UseGuards(JwtAuthGuard)
+  async changePassword(
+    @Request() req,
+    @Body() body: { currentPassword: string; newPassword: string },
+  ) {
+    const userId = req.user.userId;
+    const result = await this.usersService.changePassword(
+      userId,
+      body.currentPassword,
+      body.newPassword,
+    );
+    return result;
   }
 
   // Block a user
