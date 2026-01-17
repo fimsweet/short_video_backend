@@ -33,22 +33,48 @@ export class UsersService {
     });
 
     if (existingUser) {
-      throw new ConflictException('Username or email already exists');
+      if (existingUser.username === createUserDto.username) {
+        throw new ConflictException('Username already exists');
+      }
+      throw new ConflictException('Email already exists');
+    }
+
+    // Check if phone number already exists (if provided)
+    if (createUserDto.phoneNumber) {
+      const existingPhone = await this.userRepository.findOne({
+        where: { phoneNumber: createUserDto.phoneNumber }
+      });
+      if (existingPhone) {
+        throw new ConflictException('Phone number already exists');
+      }
     }
 
     // Hash password
     const salt = await bcrypt.genSalt();
     const hashedPassword = await bcrypt.hash(createUserDto.password, salt);
 
-    // Create new user
+    // Create new user with all fields
     const user = this.userRepository.create({
       username: createUserDto.username,
       email: createUserDto.email,
       password: hashedPassword,
+      fullName: createUserDto.fullName || null,
+      phoneNumber: createUserDto.phoneNumber || null,
+      dateOfBirth: createUserDto.dateOfBirth ? new Date(createUserDto.dateOfBirth) : null,
+      gender: createUserDto.gender || null,
     });
 
     const savedUser = await this.userRepository.save(user);
     console.log('Created user:', savedUser);
+
+    // Create user settings with the language from registration (or default 'vi')
+    const userSettings = this.userSettingsRepository.create({
+      userId: savedUser.id,
+      language: createUserDto.language || 'vi',
+      theme: 'dark',
+    });
+    await this.userSettingsRepository.save(userSettings);
+    console.log('Created user settings with language:', createUserDto.language || 'vi');
 
     // Return user without password
     const { password, ...result } = savedUser;

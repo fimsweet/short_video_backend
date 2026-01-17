@@ -14,6 +14,15 @@ export class User {
   @Column()
   password: string;
 
+  @Column({ nullable: true, type: 'varchar', length: 100 })
+  fullName: string | null;
+
+  @Column({ nullable: true, type: 'varchar', length: 20 })
+  phoneNumber: string | null;
+
+  @Column({ nullable: true, type: 'date' })
+  dateOfBirth: Date | null;
+
   @Column({ nullable: true, type: 'varchar', length: 255 })
   avatar: string | null;
 
