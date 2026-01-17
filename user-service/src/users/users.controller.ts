@@ -6,7 +6,8 @@ import {
   Patch,
   Param,
   Delete,
-  Put, // Add this
+  Put,
+  Query,
   UseInterceptors,
   UploadedFile,
   UseGuards,
@@ -62,6 +63,16 @@ export class UsersController {
   }
 
   // ============= USER ENDPOINTS =============
+
+  // Search users by username or fullName
+  @Get('search')
+  async searchUsers(@Query('q') query: string) {
+    const users = await this.usersService.searchUsers(query);
+    return {
+      success: true,
+      users,
+    };
+  }
 
   @Get('id/:userId')
   async findById(@Param('userId') userId: string) {

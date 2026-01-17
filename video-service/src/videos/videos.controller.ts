@@ -6,6 +6,7 @@ import {
   UploadedFile,
   Body,
   Param,
+  Query,
   BadRequestException,
   HttpStatus,
   HttpCode,
@@ -22,7 +23,7 @@ export class VideosController {
   constructor(
     private readonly videosService: VideosService,
     private readonly chunkedUploadService: ChunkedUploadService,
-  ) {}
+  ) { }
 
   @Post('upload')
   @HttpCode(HttpStatus.ACCEPTED) // 202 - giống POC
@@ -55,6 +56,15 @@ export class VideosController {
     return {
       success: true,
       data: videos,
+    };
+  }
+
+  @Get('search')
+  async searchVideos(@Query('q') query: string) {
+    const videos = await this.videosService.searchVideos(query);
+    return {
+      success: true,
+      videos,
     };
   }
 

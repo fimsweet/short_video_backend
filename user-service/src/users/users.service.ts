@@ -78,6 +78,25 @@ export class UsersService {
     return user;
   }
 
+  // Search users by username
+  async searchUsers(query: string, limit: number = 20): Promise<any[]> {
+    if (!query || query.trim().length === 0) {
+      return [];
+    }
+
+    const searchTerm = `%${query.toLowerCase()}%`;
+
+    const users = await this.userRepository
+      .createQueryBuilder('user')
+      .where('LOWER(user.username) LIKE :search', { search: searchTerm })
+      .orderBy('user.username', 'ASC')
+      .limit(limit)
+      .getMany();
+
+    // Return users without password
+    return users.map(({ password, ...user }) => user);
+  }
+
   async findById(id: number): Promise<User | null> {
     // ✅ Check cache first
     const cacheKey = `user:id:${id}`;

@@ -112,12 +112,12 @@ export class VideosService {
     // ✅ Check cache first
     const cacheKey = `video:${id}`;
     const cachedVideo = await this.cacheManager.get(cacheKey);
-    
+
     if (cachedVideo) {
       console.log(`✅ Cache HIT for video ${id}`);
       return cachedVideo;
     }
-    
+
     console.log(`⚠️ Cache MISS for video ${id} - fetching from DB`);
 
     const video = await this.videoRepository.findOne({ where: { id } });
@@ -144,25 +144,25 @@ export class VideosService {
 
     // ✅ Store in cache for 5 minutes
     await this.cacheManager.set(cacheKey, result, 300000);
-    
+
     return result;
   }
 
   async incrementViewCount(videoId: string): Promise<Video> {
     const video = await this.videoRepository.findOne({ where: { id: videoId } });
-    
+
     if (!video) {
       throw new Error('Video not found');
     }
 
     video.viewCount = (video.viewCount || 0) + 1;
     await this.videoRepository.save(video);
-    
+
     // ✅ Invalidate cache when video data changes
     await this.cacheManager.del(`video:${videoId}`);
-    
+
     console.log(`👁️ View count incremented for video ${videoId}: ${video.viewCount}`);
-    
+
     return video;
   }
 
@@ -171,17 +171,17 @@ export class VideosService {
       // ✅ Check cache first
       const cacheKey = `user_videos:${userId}`;
       const cachedVideos = await this.cacheManager.get(cacheKey);
-      
+
       if (cachedVideos) {
         console.log(`✅ Cache HIT for user ${userId} videos`);
         return cachedVideos as any[];
       }
-      
+
       console.log(`⚠️ Cache MISS for user ${userId} videos - fetching from DB`);
       console.log(`📹 Fetching videos for user ${userId}...`);
 
       const videos = await this.videoRepository.find({
-        where: { 
+        where: {
           userId,
         },
         order: { createdAt: 'DESC' },
@@ -226,11 +226,65 @@ export class VideosService {
 
       // ✅ Store in cache for 2 minutes (user videos change less frequently)
       await this.cacheManager.set(cacheKey, videosWithCounts, 120000);
-      
+
       return videosWithCounts;
     } catch (error) {
       console.error('❌ Error in getVideosByUserId:', error);
       throw error;
+    }
+  }
+
+  // Search videos by title or description
+  async searchVideos(query: string, limit: number = 50): Promise<any[]> {
+    if (!query || query.trim().length === 0) {
+      return [];
+    }
+
+    try {
+      const searchTerm = `%${query.toLowerCase()}%`;
+
+      const videos = await this.videoRepository
+        .createQueryBuilder('video')
+        .where('video.status = :status', { status: VideoStatus.READY })
+        .andWhere('video.isHidden = :isHidden', { isHidden: false })
+        .andWhere('(LOWER(video.title) LIKE :search OR LOWER(video.description) LIKE :search)', { search: searchTerm })
+        .orderBy('video.createdAt', 'DESC')
+        .limit(limit)
+        .getMany();
+
+      console.log(`🔍 Search found ${videos.length} videos for query: "${query}"`);
+
+      // Add like and comment counts
+      const videosWithCounts = await Promise.all(
+        videos.map(async (video) => {
+          const likeCount = await this.likesService.getLikeCount(video.id);
+          const commentCount = await this.commentsService.getCommentCount(video.id);
+          const saveCount = await this.savedVideosService.getSaveCount(video.id);
+          const shareCount = await this.sharesService.getShareCount(video.id);
+
+          return {
+            id: video.id,
+            userId: video.userId,
+            title: video.title,
+            description: video.description,
+            hlsUrl: video.hlsUrl,
+            thumbnailUrl: video.thumbnailUrl,
+            aspectRatio: video.aspectRatio,
+            status: video.status,
+            createdAt: video.createdAt,
+            likeCount,
+            commentCount,
+            saveCount,
+            shareCount,
+            viewCount: video.viewCount || 0,
+          };
+        }),
+      );
+
+      return videosWithCounts;
+    } catch (error) {
+      console.error('❌ Error searching videos:', error);
+      return [];
     }
   }
 
@@ -239,17 +293,17 @@ export class VideosService {
       // ✅ Check cache first
       const cacheKey = `all_videos:${limit}`;
       const cachedVideos = await this.cacheManager.get(cacheKey);
-      
+
       if (cachedVideos) {
         console.log(`✅ Cache HIT for all videos (limit: ${limit})`);
         return cachedVideos as any[];
       }
-      
+
       console.log(`⚠️ Cache MISS for all videos - fetching from DB`);
       console.log(`📹 Fetching all videos (limit: ${limit})...`);
 
       const videos = await this.videoRepository.find({
-        where: { 
+        where: {
           status: VideoStatus.READY,
           isHidden: false, // Only show non-hidden videos
         },
@@ -278,10 +332,10 @@ export class VideosService {
       );
 
       console.log(`📤 Returning ${videosWithCounts.length} videos with counts`);
-      
+
       // ✅ Store in cache for 1 minute (feed changes frequently)
       await this.cacheManager.set(cacheKey, videosWithCounts, 60000);
-      
+
       return videosWithCounts;
     } catch (error) {
       console.error('❌ Error in getAllVideos:', error);
@@ -298,7 +352,7 @@ export class VideosService {
       const response = await firstValueFrom(
         this.httpService.get(`${userServiceUrl}/follows/following/${userId}`)
       );
-      
+
       const followingIds: number[] = response.data.followingIds || [];
       console.log(`✅ User ${userId} is following ${followingIds.length} users`);
 
@@ -352,14 +406,14 @@ export class VideosService {
       hlsUrl,
       errorMessage,
     });
-    
+
     // ✅ Invalidate cache when video status changes
     await this.cacheManager.del(`video:${videoId}`);
   }
 
   async toggleHideVideo(videoId: string, userId: string): Promise<Video> {
     const video = await this.videoRepository.findOne({ where: { id: videoId } });
-    
+
     if (!video) {
       throw new Error('Video not found');
     }
@@ -370,17 +424,17 @@ export class VideosService {
 
     video.isHidden = !video.isHidden;
     const result = await this.videoRepository.save(video);
-    
+
     // ✅ Invalidate caches
     await this.cacheManager.del(`video:${videoId}`);
     await this.cacheManager.del(`user_videos:${userId}`);
-    
+
     return result;
   }
 
   async deleteVideo(videoId: string, userId: string): Promise<void> {
     const video = await this.videoRepository.findOne({ where: { id: videoId } });
-    
+
     if (!video) {
       throw new Error('Video not found');
     }
@@ -409,7 +463,7 @@ export class VideosService {
       // 2. Delete processed video files (HLS segments and thumbnails)
       // Extract folder name from hlsUrl or thumbnailUrl
       let processedFolderName = videoId; // Default to videoId
-      
+
       if (video.hlsUrl) {
         // hlsUrl format: /uploads/processed_videos/{folder-id}/playlist.m3u8
         const match = video.hlsUrl.match(/\/processed_videos\/([^\/]+)\//);
@@ -425,15 +479,15 @@ export class VideosService {
           console.log(`📁 Extracted folder name from thumbnailUrl: ${processedFolderName}`);
         }
       }
-      
+
       console.log(`🔍 Will delete processed videos folder: ${processedFolderName}`);
-      
+
       // Use path relative to video-service directory
       const processedVideoPath = path.resolve(__dirname, '..', '..', '..', 'video-worker-service', 'processed_videos', processedFolderName);
-      
+
       console.log(`🔍 Looking for processed videos at: ${processedVideoPath}`);
       console.log(`📂 __dirname is: ${__dirname}`);
-      
+
       if (fs.existsSync(processedVideoPath)) {
         try {
           fs.rmSync(processedVideoPath, { recursive: true, force: true });
@@ -446,7 +500,7 @@ export class VideosService {
         // Try alternative path (in case service is running in different directory)
         const alternativePath = path.resolve(process.cwd(), '..', 'video-worker-service', 'processed_videos', processedFolderName);
         console.log(`🔍 Trying alternative path: ${alternativePath}`);
-        
+
         if (fs.existsSync(alternativePath)) {
           try {
             fs.rmSync(alternativePath, { recursive: true, force: true });
@@ -469,14 +523,14 @@ export class VideosService {
 
       // 4. Finally, delete the video record from database
       await this.videoRepository.delete(videoId);
-      
+
       // ✅ Invalidate all related caches
       await this.cacheManager.del(`video:${videoId}`);
       await this.cacheManager.del(`user_videos:${userId}`);
       // Clear common feed cache keys
       await this.cacheManager.del('all_videos:50');
       await this.cacheManager.del('all_videos:100');
-      
+
       console.log(`✅ Video ${videoId} completely deleted by user ${userId}`);
     } catch (error) {
       console.error(`❌ Error deleting video ${videoId}:`, error);
