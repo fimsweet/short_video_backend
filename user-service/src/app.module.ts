@@ -9,6 +9,7 @@ import { databaseConfig } from './config/database.config';
 import { FollowsModule } from './follows/follows.module';
 import { RedisCacheModule } from './config/redis-cache.module';
 import { HealthModule } from './health/health.module';
+import { EmailModule } from './config/email.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { HealthModule } from './health/health.module';
     }),
     TypeOrmModule.forRoot(databaseConfig),
     RedisCacheModule, // ✅ Redis cache global
+    EmailModule, // ✅ Email service (Nodemailer)
     HealthModule, // ✅ Health check endpoints
     AuthModule,
     UsersModule,

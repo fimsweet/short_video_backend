@@ -17,7 +17,7 @@ export class CommentsService {
     private notificationsService: NotificationsService,
   ) {}
 
-  async createComment(videoId: string, userId: string, content: string, parentId?: string): Promise<Comment> {
+  async createComment(videoId: string, userId: string, content: string, parentId?: string, imageUrl?: string | null): Promise<Comment> {
     // If replying to a reply, find the root parent comment
     let rootParentId = parentId;
     if (parentId) {
@@ -33,6 +33,7 @@ export class CommentsService {
       userId,
       content,
       parentId: rootParentId ?? null,
+      imageUrl: imageUrl ?? null,
     });
     
     const savedComment = await this.commentRepository.save(comment);

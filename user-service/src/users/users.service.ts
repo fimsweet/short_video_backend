@@ -2,13 +2,14 @@ import { Injectable, ConflictException, NotFoundException, Inject } from '@nestj
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateUserDto } from '../auth/dto/create-user.dto';
-import { User } from '../entities/user.entity';
+import { User, AuthProvider } from '../entities/user.entity';
 import { BlockedUser } from '../entities/blocked-user.entity';
 import { UserSettings } from '../entities/user-settings.entity';
 import { UpdateUserSettingsDto } from './dto/update-user-settings.dto';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import * as bcrypt from 'bcrypt';
+import { EmailService } from '../config/email.service';
 
 @Injectable()
 export class UsersService {
@@ -21,6 +22,7 @@ export class UsersService {
     private userSettingsRepository: Repository<UserSettings>,
     @Inject(CACHE_MANAGER)
     private cacheManager: Cache,
+    private emailService: EmailService,
   ) { }
 
   async create(createUserDto: CreateUserDto) {
@@ -79,6 +81,14 @@ export class UsersService {
     // Return user without password
     const { password, ...result } = savedUser;
     return result;
+  }
+
+  // Check if username is available
+  async isUsernameAvailable(username: string): Promise<boolean> {
+    const existingUser = await this.userRepository.findOne({
+      where: { username: username.toLowerCase() }
+    });
+    return !existingUser;
   }
 
   async findOne(username: string): Promise<User | null> {
@@ -154,6 +164,84 @@ export class UsersService {
     });
   }
 
+  // Find user by OAuth provider ID (Google ID, Facebook ID, etc.)
+  async findByProviderId(provider: AuthProvider, providerId: string): Promise<User | null> {
+    return this.userRepository.findOne({
+      where: { 
+        authProvider: provider,
+        providerId: providerId,
+      }
+    });
+  }
+
+  // Create OAuth user (Google, Facebook, Apple)
+  async createOAuthUser(data: {
+    username: string;
+    email: string;
+    authProvider: AuthProvider;
+    providerId: string;
+    fullName?: string;
+    avatar?: string;
+    dateOfBirth?: Date;
+  }): Promise<Omit<User, 'password'>> {
+    const user = this.userRepository.create({
+      username: data.username,
+      email: data.email,
+      password: null, // OAuth users don't have password
+      authProvider: data.authProvider,
+      providerId: data.providerId,
+      fullName: data.fullName || null,
+      avatar: data.avatar || null,
+      dateOfBirth: data.dateOfBirth || null,
+      isVerified: true, // OAuth users are verified by provider
+    });
+
+    const savedUser = await this.userRepository.save(user);
+
+    // Create user settings
+    const userSettings = this.userSettingsRepository.create({
+      userId: savedUser.id,
+      language: 'vi',
+      theme: 'dark',
+    });
+    await this.userSettingsRepository.save(userSettings);
+
+    const { password, ...result } = savedUser;
+    return result;
+  }
+
+  // Create Email user (TikTok-style registration)
+  async createEmailUser(data: {
+    username: string;
+    email: string;
+    password: string;
+    dateOfBirth?: Date;
+    fullName?: string;
+  }): Promise<Omit<User, 'password'>> {
+    const user = this.userRepository.create({
+      username: data.username,
+      email: data.email,
+      password: data.password,
+      authProvider: 'email' as AuthProvider,
+      fullName: data.fullName || null,
+      dateOfBirth: data.dateOfBirth || null,
+      isVerified: false, // Email users need to verify
+    });
+
+    const savedUser = await this.userRepository.save(user);
+
+    // Create user settings
+    const userSettings = this.userSettingsRepository.create({
+      userId: savedUser.id,
+      language: 'vi',
+      theme: 'dark',
+    });
+    await this.userSettingsRepository.save(userSettings);
+
+    const { password, ...result } = savedUser;
+    return result;
+  }
+
   async updateAvatar(userId: number, avatarPath: string): Promise<User> {
     const user = await this.findById(userId);
     if (!user) {
@@ -186,7 +274,7 @@ export class UsersService {
     return updatedUser;
   }
 
-  async updateProfile(userId: number, updateData: { bio?: string; avatar?: string; website?: string; location?: string; gender?: string }) {
+  async updateProfile(userId: number, updateData: { bio?: string; avatar?: string; gender?: string; dateOfBirth?: string }) {
     try {
       console.log(`📝 Updating profile for user ${userId}`, updateData);
 
@@ -203,16 +291,12 @@ export class UsersService {
         user.avatar = updateData.avatar;
       }
 
-      if (updateData.website !== undefined) {
-        user.website = updateData.website;
-      }
-
-      if (updateData.location !== undefined) {
-        user.location = updateData.location;
-      }
-
       if (updateData.gender !== undefined) {
         user.gender = updateData.gender;
+      }
+
+      if (updateData.dateOfBirth !== undefined) {
+        user.dateOfBirth = updateData.dateOfBirth ? new Date(updateData.dateOfBirth) : null;
       }
 
       const updatedUser = await this.userRepository.save(user);
@@ -229,8 +313,7 @@ export class UsersService {
         email: updatedUser.email,
         avatar: updatedUser.avatar,
         bio: updatedUser.bio,
-        website: updatedUser.website,
-        location: updatedUser.location,
+        dateOfBirth: updatedUser.dateOfBirth,
         gender: updatedUser.gender,
       };
     } catch (error) {
@@ -245,6 +328,11 @@ export class UsersService {
       const user = await this.userRepository.findOne({ where: { id: userId } });
       if (!user) {
         return { success: false, message: 'Không tìm thấy người dùng' };
+      }
+
+      // Check if user has a password (OAuth users don't have password)
+      if (!user.password) {
+        return { success: false, message: 'Tài khoản này sử dụng đăng nhập mạng xã hội' };
       }
 
       // Verify current password
@@ -270,6 +358,156 @@ export class UsersService {
     } catch (error) {
       console.error('❌ Error changing password:', error);
       return { success: false, message: 'Lỗi khi đổi mật khẩu' };
+    }
+  }
+
+  // Check if user has password (for OAuth users)
+  async hasPassword(userId: number): Promise<boolean> {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    return user?.password != null;
+  }
+
+  // Set password for OAuth users (who don't have password yet)
+  async setPassword(userId: number, newPassword: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) {
+        return { success: false, message: 'Không tìm thấy người dùng' };
+      }
+
+      // Check if user already has a password
+      if (user.password) {
+        return { success: false, message: 'Tài khoản đã có mật khẩu. Vui lòng sử dụng chức năng đổi mật khẩu.' };
+      }
+
+      // Hash new password
+      const saltRounds = 10;
+      const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+      // Update password
+      user.password = hashedPassword;
+      await this.userRepository.save(user);
+
+      // Invalidate cache
+      await this.cacheManager.del(`user:id:${userId}`);
+      await this.cacheManager.del(`user:username:${user.username}`);
+
+      console.log(`✅ Password set for OAuth user ${userId}`);
+      return { success: true, message: 'Đặt mật khẩu thành công' };
+    } catch (error) {
+      console.error('❌ Error setting password:', error);
+      return { success: false, message: 'Lỗi khi đặt mật khẩu' };
+    }
+  }
+
+  // Store for OTP codes (in production, use Redis)
+  private otpStore: Map<string, { code: string; expiresAt: Date }> = new Map();
+
+  // Verify OTP only (without resetting password)
+  async verifyOtp(email: string, otp: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const storedOtp = this.otpStore.get(email);
+      
+      if (!storedOtp) {
+        return { success: false, message: 'Mã xác nhận không hợp lệ hoặc đã hết hạn' };
+      }
+
+      if (new Date() > storedOtp.expiresAt) {
+        this.otpStore.delete(email);
+        return { success: false, message: 'Mã xác nhận đã hết hạn' };
+      }
+
+      if (storedOtp.code !== otp) {
+        return { success: false, message: 'Mã xác nhận không đúng' };
+      }
+
+      return { success: true, message: 'Mã xác nhận hợp lệ' };
+    } catch (error) {
+      console.error('❌ Error verifying OTP:', error);
+      return { success: false, message: 'Lỗi khi xác minh mã' };
+    }
+  }
+
+  // Generate and store OTP for password reset
+  async generatePasswordResetOtp(email: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const user = await this.userRepository.findOne({ where: { email } });
+      if (!user) {
+        // Return error if email doesn't exist
+        return { success: false, message: 'Email này không tồn tại trong hệ thống' };
+      }
+
+      // Generate 6-digit OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+      // Store OTP
+      this.otpStore.set(email, { code: otp, expiresAt });
+
+      // Send OTP via email
+      const emailSent = await this.emailService.sendOtpEmail(email, otp);
+      
+      if (!emailSent) {
+        console.error('❌ Failed to send OTP email');
+        return { success: false, message: 'Không thể gửi email. Vui lòng thử lại sau.' };
+      }
+
+      console.log(`🔑 OTP for ${email}: ${otp}`); // Log for debugging
+
+      return { 
+        success: true, 
+        message: 'Mã xác nhận đã được gửi đến email của bạn'
+      };
+    } catch (error) {
+      console.error('❌ Error generating OTP:', error);
+      return { success: false, message: 'Lỗi khi tạo mã xác nhận' };
+    }
+  }
+
+  // Verify OTP and reset password
+  async verifyOtpAndResetPassword(email: string, otp: string, newPassword: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const storedOtp = this.otpStore.get(email);
+      
+      if (!storedOtp) {
+        return { success: false, message: 'Mã xác nhận không hợp lệ hoặc đã hết hạn' };
+      }
+
+      if (new Date() > storedOtp.expiresAt) {
+        this.otpStore.delete(email);
+        return { success: false, message: 'Mã xác nhận đã hết hạn' };
+      }
+
+      if (storedOtp.code !== otp) {
+        return { success: false, message: 'Mã xác nhận không đúng' };
+      }
+
+      // Find user and update password
+      const user = await this.userRepository.findOne({ where: { email } });
+      if (!user) {
+        return { success: false, message: 'Không tìm thấy người dùng' };
+      }
+
+      // Hash new password
+      const saltRounds = 10;
+      const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+      // Update password
+      user.password = hashedPassword;
+      await this.userRepository.save(user);
+
+      // Delete OTP after successful use
+      this.otpStore.delete(email);
+
+      // Invalidate cache
+      await this.cacheManager.del(`user:id:${user.id}`);
+      await this.cacheManager.del(`user:username:${user.username}`);
+
+      console.log(`✅ Password reset successful for ${email}`);
+      return { success: true, message: 'Đặt lại mật khẩu thành công' };
+    } catch (error) {
+      console.error('❌ Error resetting password:', error);
+      return { success: false, message: 'Lỗi khi đặt lại mật khẩu' };
     }
   }
 

@@ -17,6 +17,9 @@ export class Comment {
   @Column('text')
   content: string;
 
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  imageUrl: string | null; // Image attached to comment
+
   @Column({ type: 'varchar', length: 36, nullable: true })
   @Index()
   parentId: string | null; // For replies

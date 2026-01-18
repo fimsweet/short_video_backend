@@ -64,6 +64,17 @@ export class UsersController {
 
   // ============= USER ENDPOINTS =============
 
+  // Check if username is available
+  @Get('check-username/:username')
+  async checkUsernameAvailability(@Param('username') username: string) {
+    const isAvailable = await this.usersService.isUsernameAvailable(username);
+    return {
+      success: true,
+      available: isAvailable,
+      username,
+    };
+  }
+
   // Search users by username or fullName
   @Get('search')
   async searchUsers(@Query('q') query: string) {
@@ -123,7 +134,7 @@ export class UsersController {
 
   @Put('profile')
   @UseGuards(JwtAuthGuard)
-  async updateProfile(@Request() req, @Body() updateData: { bio?: string; website?: string; location?: string; gender?: string }) {
+  async updateProfile(@Request() req, @Body() updateData: { bio?: string; gender?: string; dateOfBirth?: string }) {
     const userId = req.user.userId;
     const updatedUser = await this.usersService.updateProfile(userId, updateData);
     return {
@@ -144,6 +155,54 @@ export class UsersController {
     const result = await this.usersService.changePassword(
       userId,
       body.currentPassword,
+      body.newPassword,
+    );
+    return result;
+  }
+
+  // Check if user has password (for OAuth users to know if they need to set or change password)
+  @Get('has-password')
+  @UseGuards(JwtAuthGuard)
+  async hasPassword(@Request() req) {
+    const userId = req.user.userId;
+    const hasPassword = await this.usersService.hasPassword(userId);
+    return { success: true, hasPassword };
+  }
+
+  // Set password for OAuth users (who don't have password yet)
+  @Post('set-password')
+  @UseGuards(JwtAuthGuard)
+  async setPassword(
+    @Request() req,
+    @Body() body: { newPassword: string },
+  ) {
+    const userId = req.user.userId;
+    const result = await this.usersService.setPassword(userId, body.newPassword);
+    return result;
+  }
+
+  // Request password reset OTP
+  @Post('forgot-password')
+  async forgotPassword(@Body() body: { email: string }) {
+    const result = await this.usersService.generatePasswordResetOtp(body.email);
+    return result;
+  }
+
+  // Verify OTP only (without resetting password)
+  @Post('verify-otp')
+  async verifyOtp(@Body() body: { email: string; otp: string }) {
+    const result = await this.usersService.verifyOtp(body.email, body.otp);
+    return result;
+  }
+
+  // Verify OTP and reset password
+  @Post('reset-password')
+  async resetPassword(
+    @Body() body: { email: string; otp: string; newPassword: string },
+  ) {
+    const result = await this.usersService.verifyOtpAndResetPassword(
+      body.email,
+      body.otp,
       body.newPassword,
     );
     return result;
