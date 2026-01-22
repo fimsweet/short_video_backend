@@ -167,7 +167,7 @@ export class UsersService {
   // Find user by OAuth provider ID (Google ID, Facebook ID, etc.)
   async findByProviderId(provider: AuthProvider, providerId: string): Promise<User | null> {
     return this.userRepository.findOne({
-      where: { 
+      where: {
         authProvider: provider,
         providerId: providerId,
       }
@@ -234,6 +234,62 @@ export class UsersService {
     const userSettings = this.userSettingsRepository.create({
       userId: savedUser.id,
       language: 'vi',
+      theme: 'dark',
+    });
+    await this.userSettingsRepository.save(userSettings);
+
+    const { password, ...result } = savedUser;
+    return result;
+  }
+
+  // Find user by phone number
+  async findByPhone(phone: string): Promise<User | null> {
+    return this.userRepository.findOne({
+      where: { phoneNumber: phone }
+    });
+  }
+
+  // Create Phone user (Firebase Phone Auth)
+  async createPhoneUser(data: {
+    username: string;
+    phone: string;
+    firebaseUid: string;
+    dateOfBirth?: Date;
+    fullName?: string;
+    language?: string;
+  }): Promise<Omit<User, 'password'>> {
+    // Check if phone number already exists
+    const existingPhone = await this.findByPhone(data.phone);
+    if (existingPhone) {
+      throw new ConflictException('Phone number already registered');
+    }
+
+    // Check if username already exists
+    const existingUsername = await this.findOne(data.username);
+    if (existingUsername) {
+      throw new ConflictException('Username already taken');
+    }
+
+    // Phone users don't have email - they can link one later
+    const user = this.userRepository.create({
+      username: data.username,
+      email: null, // Phone users don't have email initially
+      password: null, // Phone users don't have password
+      authProvider: 'phone' as AuthProvider,
+      providerId: data.firebaseUid,
+      phoneNumber: data.phone,
+      fullName: data.fullName || null,
+      dateOfBirth: data.dateOfBirth || null,
+      isVerified: true, // Phone users are verified via OTP
+    });
+
+    const savedUser = await this.userRepository.save(user);
+    console.log(`📱 Created phone user: ${savedUser.username} (${data.phone})`);
+
+    // Create user settings
+    const userSettings = this.userSettingsRepository.create({
+      userId: savedUser.id,
+      language: data.language || 'vi',
       theme: 'dark',
     });
     await this.userSettingsRepository.save(userSettings);
@@ -407,7 +463,7 @@ export class UsersService {
   async verifyOtp(email: string, otp: string): Promise<{ success: boolean; message: string }> {
     try {
       const storedOtp = this.otpStore.get(email);
-      
+
       if (!storedOtp) {
         return { success: false, message: 'Mã xác nhận không hợp lệ hoặc đã hết hạn' };
       }
@@ -446,7 +502,7 @@ export class UsersService {
 
       // Send OTP via email
       const emailSent = await this.emailService.sendOtpEmail(email, otp);
-      
+
       if (!emailSent) {
         console.error('❌ Failed to send OTP email');
         return { success: false, message: 'Không thể gửi email. Vui lòng thử lại sau.' };
@@ -454,8 +510,8 @@ export class UsersService {
 
       console.log(`🔑 OTP for ${email}: ${otp}`); // Log for debugging
 
-      return { 
-        success: true, 
+      return {
+        success: true,
         message: 'Mã xác nhận đã được gửi đến email của bạn'
       };
     } catch (error) {
@@ -468,7 +524,7 @@ export class UsersService {
   async verifyOtpAndResetPassword(email: string, otp: string, newPassword: string): Promise<{ success: boolean; message: string }> {
     try {
       const storedOtp = this.otpStore.get(email);
-      
+
       if (!storedOtp) {
         return { success: false, message: 'Mã xác nhận không hợp lệ hoặc đã hết hạn' };
       }
@@ -656,5 +712,206 @@ export class UsersService {
     console.log(`✅ Settings updated for user ${userId}`, updateData);
 
     return updatedSettings;
+  }
+
+  // ============= ACCOUNT LINKING METHODS (TikTok-style) =============
+
+  // Link email to existing account (for phone users) with password for email login
+  async linkEmail(userId: number, email: string, hashedPassword?: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) {
+        return { success: false, message: 'Không tìm thấy người dùng' };
+      }
+
+      // Check if email already exists
+      const existingEmail = await this.userRepository.findOne({ where: { email } });
+      if (existingEmail && existingEmail.id !== userId) {
+        return { success: false, message: 'Email này đã được sử dụng bởi tài khoản khác' };
+      }
+
+      // Check if user already has a real email (not placeholder)
+      const isPlaceholderEmail = user.email?.endsWith('@phone.user');
+      const hasRealEmail = user.email && !isPlaceholderEmail;
+      
+      // Update email
+      user.email = email;
+      
+      // If password provided, set it so user can login with email+password
+      if (hashedPassword) {
+        user.password = hashedPassword;
+      }
+      
+      await this.userRepository.save(user);
+
+      // Invalidate cache
+      await this.cacheManager.del(`user:id:${userId}`);
+      await this.cacheManager.del(`user:username:${user.username}`);
+
+      console.log(`✅ Email linked for user ${userId}: ${email}${hashedPassword ? ' (with password)' : ''}`);
+      return { 
+        success: true, 
+        message: hasRealEmail ? 'Email đã được cập nhật' : 'Email đã được thêm vào tài khoản' 
+      };
+    } catch (error) {
+      console.error('❌ Error linking email:', error);
+      return { success: false, message: 'Lỗi khi liên kết email' };
+    }
+  }
+
+  // Link phone to existing account (for email/Google users)
+  async linkPhone(userId: number, phone: string, firebaseUid?: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) {
+        return { success: false, message: 'Không tìm thấy người dùng' };
+      }
+
+      // Check if phone already exists
+      const existingPhone = await this.userRepository.findOne({ where: { phoneNumber: phone } });
+      if (existingPhone && existingPhone.id !== userId) {
+        return { success: false, message: 'Số điện thoại này đã được sử dụng bởi tài khoản khác' };
+      }
+
+      // Update phone
+      user.phoneNumber = phone;
+      if (firebaseUid) {
+        user.providerId = firebaseUid;
+      }
+      await this.userRepository.save(user);
+
+      // Invalidate cache
+      await this.cacheManager.del(`user:id:${userId}`);
+      await this.cacheManager.del(`user:username:${user.username}`);
+
+      console.log(`✅ Phone linked for user ${userId}: ${phone}`);
+      return { success: true, message: 'Số điện thoại đã được thêm vào tài khoản' };
+    } catch (error) {
+      console.error('❌ Error linking phone:', error);
+      return { success: false, message: 'Lỗi khi liên kết số điện thoại' };
+    }
+  }
+
+  // Link Google account to existing user (TikTok-style: allows login via Google after linking email)
+  async linkGoogleToExistingAccount(userId: number, googleProviderId: string): Promise<void> {
+    try {
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) {
+        return;
+      }
+
+      // Store Google provider ID so user can login with Google next time
+      // We use a separate field or update providerId based on authProvider
+      // For now, we'll just log it - the email match is enough for authentication
+      console.log(`🔗 Google account linked for user ${userId}, providerId: ${googleProviderId}`);
+      
+      // Optional: Store googleProviderId for faster lookup next time
+      // You could add a googleProviderId column to the user entity
+      // For now, we rely on email matching
+      
+      // Invalidate cache
+      await this.cacheManager.del(`user:id:${userId}`);
+      await this.cacheManager.del(`user:username:${user.username}`);
+    } catch (error) {
+      console.error('❌ Error linking Google to existing account:', error);
+    }
+  }
+
+  // Get full account info with linked accounts
+  async getAccountInfo(userId: number): Promise<any> {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      return null;
+    }
+
+    // Check for legacy placeholder emails and treat as null
+    const isPlaceholderEmail = user.email?.endsWith('@phone.user');
+    const actualEmail = isPlaceholderEmail ? null : user.email;
+
+    return {
+      id: user.id,
+      username: user.username,
+      email: actualEmail,
+      phoneNumber: user.phoneNumber,
+      authProvider: user.authProvider,
+      hasPassword: !!user.password,
+      isVerified: user.isVerified,
+      avatar: user.avatar,
+      fullName: user.fullName,
+      bio: user.bio,
+      gender: user.gender,
+      dateOfBirth: user.dateOfBirth,
+      createdAt: user.createdAt,
+      // 2FA info
+      twoFactorEnabled: user.twoFactorEnabled || false,
+      twoFactorMethods: user.twoFactorMethods || [],
+    };
+  }
+
+  // Update 2FA settings
+  async update2FASettings(userId: number, enabled: boolean, methods: string[]): Promise<{ success: boolean; message: string }> {
+    try {
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) {
+        return { success: false, message: 'User not found' };
+      }
+
+      user.twoFactorEnabled = enabled;
+      user.twoFactorMethods = methods.length > 0 ? methods : null;
+      await this.userRepository.save(user);
+
+      // Invalidate cache
+      await this.cacheManager.del(`user:id:${user.id}`);
+
+      console.log(`✅ 2FA settings updated for user ${userId}: enabled=${enabled}, methods=${methods.join(',')}`);
+      return { success: true, message: 'Cập nhật 2FA thành công' };
+    } catch (error) {
+      console.error('❌ Error updating 2FA settings:', error);
+      return { success: false, message: 'Lỗi khi cập nhật 2FA' };
+    }
+  }
+
+  // Get 2FA settings
+  async get2FASettings(userId: number): Promise<{ enabled: boolean; methods: string[] } | null> {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) return null;
+    return {
+      enabled: user.twoFactorEnabled || false,
+      methods: user.twoFactorMethods || [],
+    };
+  }
+
+  // Reset password by phone (for phone users)
+  async resetPasswordByPhone(phone: string, newPassword: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const user = await this.userRepository.findOne({ where: { phoneNumber: phone } });
+      if (!user) {
+        return { success: false, message: 'Số điện thoại không tồn tại trong hệ thống' };
+      }
+
+      // Hash new password
+      const saltRounds = 10;
+      const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+      // Update password
+      user.password = hashedPassword;
+      await this.userRepository.save(user);
+
+      // Invalidate cache
+      await this.cacheManager.del(`user:id:${user.id}`);
+      await this.cacheManager.del(`user:username:${user.username}`);
+
+      console.log(`✅ Password reset via phone for user ${user.id}`);
+      return { success: true, message: 'Đặt lại mật khẩu thành công' };
+    } catch (error) {
+      console.error('❌ Error resetting password by phone:', error);
+      return { success: false, message: 'Lỗi khi đặt lại mật khẩu' };
+    }
+  }
+
+  // Check if phone number exists (for forgot password)
+  async phoneExists(phone: string): Promise<boolean> {
+    const user = await this.userRepository.findOne({ where: { phoneNumber: phone } });
+    return !!user;
   }
 }

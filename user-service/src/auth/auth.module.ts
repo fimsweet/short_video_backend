@@ -6,11 +6,15 @@ import { PassportModule } from '@nestjs/passport';
 import { JwtModule } from '@nestjs/jwt';
 import { JwtStrategy } from './jwt.strategy';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { OtpModule } from '../otp/otp.module';
+import { FirebaseAdminService } from './firebase-admin.service';
+import { EmailService } from '../config/email.service';
 
 @Module({
   imports: [
     UsersModule,
     PassportModule,
+    OtpModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -21,6 +25,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
+  providers: [AuthService, JwtStrategy, FirebaseAdminService, EmailService],
+  exports: [FirebaseAdminService],
 })
-export class AuthModule {}
+export class AuthModule { }

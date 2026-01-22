@@ -10,8 +10,8 @@ export class User {
   @Column({ unique: true })
   username: string;
 
-  @Column({ unique: true })
-  email: string;
+  @Column({ unique: true, nullable: true, type: 'varchar', length: 255 })
+  email: string | null;
 
   @Column({ nullable: true, type: 'varchar', length: 255 })
   password: string | null;
@@ -42,6 +42,13 @@ export class User {
 
   @Column({ default: false })
   isVerified: boolean;
+
+  // Two-Factor Authentication
+  @Column({ default: false })
+  twoFactorEnabled: boolean;
+
+  @Column({ type: 'simple-array', nullable: true })
+  twoFactorMethods: string[] | null; // ['email', 'sms', 'app']
 
   @CreateDateColumn()
   createdAt: Date;
