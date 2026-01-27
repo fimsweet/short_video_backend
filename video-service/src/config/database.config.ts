@@ -8,6 +8,10 @@ import { Notification } from '../entities/notification.entity';
 import { SavedVideo } from '../entities/saved-video.entity';
 import { Message } from '../entities/message.entity';
 import { Conversation } from '../entities/conversation.entity';
+import { Category } from '../entities/category.entity';
+import { VideoCategory } from '../entities/video-category.entity';
+import { Share } from '../entities/share.entity';
+import { WatchHistory } from '../entities/watch-history.entity';
 
 export const getDatabaseConfig = (configService: ConfigService): TypeOrmModuleOptions => ({
   type: 'mysql',
@@ -16,7 +20,7 @@ export const getDatabaseConfig = (configService: ConfigService): TypeOrmModuleOp
   username: configService.get<string>('DB_USERNAME', 'admin'),
   password: configService.get<string>('DB_PASSWORD', 'password'),
   database: configService.get<string>('DB_NAME', 'short_video_db'),
-  entities: [Video, Like, Comment, CommentLike, Notification, SavedVideo, Message, Conversation],
+  entities: [Video, Like, Comment, CommentLike, Notification, SavedVideo, Message, Conversation, Category, VideoCategory, Share, WatchHistory],
   synchronize: true,
   logging: configService.get<string>('NODE_ENV') === 'development',
   autoLoadEntities: true,

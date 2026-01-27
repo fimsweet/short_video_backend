@@ -45,9 +45,13 @@ export class VideosController {
     };
   }
 
-  @Get(':id')
-  async getVideo(@Param('id') id: string) {
-    return this.videosService.getVideoById(id);
+  @Get('search')
+  async searchVideos(@Query('q') query: string) {
+    const videos = await this.videosService.searchVideos(query);
+    return {
+      success: true,
+      videos,
+    };
   }
 
   @Get('user/:userId')
@@ -59,15 +63,6 @@ export class VideosController {
     };
   }
 
-  @Get('search')
-  async searchVideos(@Query('q') query: string) {
-    const videos = await this.videosService.searchVideos(query);
-    return {
-      success: true,
-      videos,
-    };
-  }
-
   @Get('feed/all')
   async getFeed() {
     return this.videosService.getAllVideos(50);
@@ -76,6 +71,12 @@ export class VideosController {
   @Get('feed/following/:userId')
   async getFollowingFeed(@Param('userId') userId: string) {
     return this.videosService.getFollowingVideos(parseInt(userId, 10), 50);
+  }
+
+  // ⚠️ IMPORTANT: :id route must be LAST to avoid catching other routes
+  @Get(':id')
+  async getVideo(@Param('id') id: string) {
+    return this.videosService.getVideoById(id);
   }
 
   @Post(':id/view')
@@ -112,6 +113,20 @@ export class VideosController {
     return {
       success: true,
       message: 'Video đã được xóa',
+    };
+  }
+
+  // Endpoint for video-worker-service to invalidate cache after processing
+  @Post(':id/processing-complete')
+  @HttpCode(HttpStatus.OK)
+  async onProcessingComplete(
+    @Param('id') id: string,
+    @Body('userId') userId: string,
+  ) {
+    await this.videosService.invalidateCacheAfterProcessing(id, userId);
+    return {
+      success: true,
+      message: 'Cache invalidated for video processing completion',
     };
   }
 

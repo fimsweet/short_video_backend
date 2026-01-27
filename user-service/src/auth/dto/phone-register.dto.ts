@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, Matches, IsOptional, IsDateString } from 'class-validator';
+import { IsString, IsNotEmpty, Matches, IsOptional, IsDateString, IsIn } from 'class-validator';
 
 // DTO for phone registration with Firebase token
 export class PhoneRegisterDto {
@@ -20,6 +20,11 @@ export class PhoneRegisterDto {
     @IsOptional()
     @IsDateString()
     dateOfBirth?: string;
+
+    @IsOptional()
+    @IsString()
+    @IsIn(['vi', 'en'])
+    language?: string;
 }
 
 // DTO for phone login with Firebase token

@@ -15,6 +15,8 @@ import { SavedVideosService } from '../saved-videos/saved-videos.service';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { SharesService } from '../shares/shares.service';
+import { CategoriesService } from '../categories/categories.service';
+import { SearchService } from '../search/search.service';
 
 @Injectable()
 export class VideosService {
@@ -36,6 +38,9 @@ export class VideosService {
     @Inject(forwardRef(() => SharesService))
     private sharesService: SharesService,
     private httpService: HttpService,
+    @Inject(forwardRef(() => CategoriesService))
+    private categoriesService: CategoriesService,
+    private searchService: SearchService,
   ) {
     this.rabbitMQUrl = this.configService.get<string>('RABBITMQ_URL') || 'amqp://admin:password@localhost:5672';
     this.queueName = this.configService.get<string>('RABBITMQ_QUEUE') || 'video_processing_queue';
@@ -64,7 +69,16 @@ export class VideosService {
       const savedVideo = await this.videoRepository.save(video);
       console.log('✅ Video saved to database:', savedVideo.id);
 
-      // 2. Gửi message vào RabbitMQ để worker xử lý
+      // 2. Assign categories to video if provided
+      if (uploadVideoDto.categoryIds && uploadVideoDto.categoryIds.length > 0) {
+        await this.categoriesService.assignCategoriesToVideo(
+          savedVideo.id,
+          uploadVideoDto.categoryIds,
+        );
+        console.log('✅ Categories assigned:', uploadVideoDto.categoryIds);
+      }
+
+      // 3. Gửi message vào RabbitMQ để worker xử lý
       await this.sendToQueue({
         videoId: savedVideo.id,
         filePath: file.path,
@@ -72,11 +86,28 @@ export class VideosService {
       });
       console.log('✅ Job sent to RabbitMQ queue');
 
+      // 4. Invalidate user videos cache so new processing video appears immediately
+      await this.cacheManager.del(`user_videos:${uploadVideoDto.userId}`);
+      console.log(`✅ Cache invalidated for user ${uploadVideoDto.userId}`);
+
       return savedVideo;
     } catch (error) {
       console.error('Error uploading video:', error);
       throw error;
     }
+  }
+
+  // Called by video-worker-service after processing completes
+  async invalidateCacheAfterProcessing(videoId: string, userId: string): Promise<void> {
+    console.log(`🔄 Invalidating cache after processing for video ${videoId}, user ${userId}`);
+    
+    // Invalidate all relevant caches
+    await this.cacheManager.del(`video:${videoId}`);
+    await this.cacheManager.del(`user_videos:${userId}`);
+    await this.cacheManager.del('all_videos:50');
+    await this.cacheManager.del('all_videos:100');
+    
+    console.log(`✅ Cache invalidated for video ${videoId}`);
   }
 
   private async sendToQueue(message: any): Promise<void> {
@@ -241,6 +272,37 @@ export class VideosService {
     }
 
     try {
+      // ✅ Try Elasticsearch first
+      if (this.searchService.isAvailable()) {
+        console.log(`🔍 Using Elasticsearch for search: "${query}"`);
+        const esResults = await this.searchService.searchVideos(query, limit);
+        console.log(`🔍 Elasticsearch found ${esResults.length} videos for query: "${query}"`);
+        
+        if (esResults.length > 0) {
+          // Enrich with latest counts from DB
+          const videosWithCounts = await Promise.all(
+            esResults.map(async (video) => {
+              const likeCount = await this.likesService.getLikeCount(video.id);
+              const commentCount = await this.commentsService.getCommentCount(video.id);
+              const saveCount = await this.savedVideosService.getSaveCount(video.id);
+              const shareCount = await this.sharesService.getShareCount(video.id);
+
+              return {
+                ...video,
+                likeCount,
+                commentCount,
+                saveCount,
+                shareCount,
+                status: VideoStatus.READY,
+              };
+            }),
+          );
+          return videosWithCounts;
+        }
+      }
+
+      // Fallback to SQL search
+      console.log(`🔍 Using SQL fallback for search: "${query}"`);
       const searchTerm = `%${query.toLowerCase()}%`;
 
       const videos = await this.videoRepository
@@ -252,7 +314,7 @@ export class VideosService {
         .limit(limit)
         .getMany();
 
-      console.log(`🔍 Search found ${videos.length} videos for query: "${query}"`);
+      console.log(`🔍 SQL search found ${videos.length} videos for query: "${query}"`);
 
       // Add like and comment counts
       const videosWithCounts = await Promise.all(
@@ -409,6 +471,28 @@ export class VideosService {
 
     // ✅ Invalidate cache when video status changes
     await this.cacheManager.del(`video:${videoId}`);
+
+    // ✅ Index to Elasticsearch when video is ready
+    if (status === VideoStatus.READY) {
+      const video = await this.videoRepository.findOne({ where: { id: videoId } });
+      if (video) {
+        const likeCount = await this.likesService.getLikeCount(videoId);
+        const commentCount = await this.commentsService.getCommentCount(videoId);
+        await this.searchService.indexVideo({
+          id: video.id,
+          userId: video.userId,
+          title: video.title || '',
+          description: video.description || '',
+          thumbnailUrl: video.thumbnailUrl || '',
+          hlsUrl: video.hlsUrl || '',
+          aspectRatio: video.aspectRatio || '9:16',
+          viewCount: video.viewCount || 0,
+          likeCount,
+          commentCount,
+          createdAt: video.createdAt,
+        });
+      }
+    }
   }
 
   async toggleHideVideo(videoId: string, userId: string): Promise<Video> {
@@ -523,6 +607,9 @@ export class VideosService {
 
       // 4. Finally, delete the video record from database
       await this.videoRepository.delete(videoId);
+
+      // ✅ Delete from Elasticsearch index
+      await this.searchService.deleteVideo(videoId);
 
       // ✅ Invalidate all related caches
       await this.cacheManager.del(`video:${videoId}`);

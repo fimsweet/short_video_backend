@@ -1,0 +1,505 @@
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, In, Not } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
+import { HttpService } from '@nestjs/axios';
+import { firstValueFrom } from 'rxjs';
+import { Video, VideoStatus } from '../entities/video.entity';
+import { VideoCategory } from '../entities/video-category.entity';
+import { Like } from '../entities/like.entity';
+import { LikesService } from '../likes/likes.service';
+import { CommentsService } from '../comments/comments.service';
+import { SavedVideosService } from '../saved-videos/saved-videos.service';
+import { SharesService } from '../shares/shares.service';
+import { CategoriesService } from '../categories/categories.service';
+import { WatchHistoryService } from '../watch-history/watch-history.service';
+
+interface UserInterest {
+  categoryId: number;
+  categoryName: string;
+  weight: number;
+}
+
+interface ScoredVideo {
+  video: Video;
+  score: number;
+  matchedCategories: number[];
+}
+
+// Algorithm weights - tunable parameters
+const WEIGHTS = {
+  INTEREST_MATCH: 0.35, // From user interests + watch time
+  ENGAGEMENT: 0.25,      // Likes, views ratio
+  RECENCY: 0.20,         // Newer videos preferred
+  EXPLORATION: 0.15,     // Random factor for discovery (increased from 0.1)
+  FRESHNESS: 0.05,       // Bonus for videos user hasn't seen
+};
+
+@Injectable()
+export class RecommendationService {
+  constructor(
+    @InjectRepository(Video)
+    private videoRepository: Repository<Video>,
+    @InjectRepository(VideoCategory)
+    private videoCategoryRepository: Repository<VideoCategory>,
+    @InjectRepository(Like)
+    private likeRepository: Repository<Like>,
+    private configService: ConfigService,
+    @Inject(CACHE_MANAGER)
+    private cacheManager: Cache,
+    @Inject(forwardRef(() => LikesService))
+    private likesService: LikesService,
+    @Inject(forwardRef(() => CommentsService))
+    private commentsService: CommentsService,
+    @Inject(forwardRef(() => SavedVideosService))
+    private savedVideosService: SavedVideosService,
+    @Inject(forwardRef(() => SharesService))
+    private sharesService: SharesService,
+    private categoriesService: CategoriesService,
+    private httpService: HttpService,
+    @Inject(forwardRef(() => WatchHistoryService))
+    private watchHistoryService: WatchHistoryService,
+  ) {}
+
+  /**
+   * Get personalized video recommendations for a user
+   * 
+   * Algorithm: Hybrid (Content-Based + Watch Time + Engagement + Recency + Exploration)
+   * 
+   * Score = (Interest Match × 0.35) + (Engagement × 0.25) + (Recency × 0.20) + (Exploration × 0.15) + (Freshness × 0.05)
+   * 
+   * Interest Match includes:
+   * - Explicit interests (user selected)
+   * - Implicit from likes
+   * - Implicit from watch time (NEW - most important signal)
+   */
+  async getRecommendedVideos(userId: number, limit: number = 50): Promise<any[]> {
+    const cacheKey = `recommendations:${userId}:${limit}`;
+    
+    // Check cache first (shorter TTL for personalized content)
+    const cached = await this.cacheManager.get(cacheKey);
+    if (cached) {
+      console.log(`✅ Cache HIT for user ${userId} recommendations`);
+      return cached as any[];
+    }
+
+    console.log(`📊 Generating recommendations for user ${userId}...`);
+
+    try {
+      // 1. Get user interests from user-service (explicit)
+      const userInterests = await this.getUserInterests(userId);
+      console.log(`   Explicit interests: ${userInterests.map(i => i.categoryName).join(', ') || 'None'}`);
+
+      // 2. Get implicit interests from liked videos
+      const likeBasedInterests = await this.getImplicitInterests(userId);
+      console.log(`   Like-based interests: ${likeBasedInterests.map(i => i.categoryName).join(', ') || 'None'}`);
+
+      // 3. Get watch-time based interests (NEW - most important signal)
+      const watchTimeInterests = await this.getWatchTimeInterests(userId);
+      console.log(`   Watch-time interests: ${watchTimeInterests.map(i => i.categoryName).join(', ') || 'None'}`);
+
+      // 4. Merge all interests with different weights
+      const allInterests = this.mergeAllInterests(userInterests, likeBasedInterests, watchTimeInterests);
+      console.log(`   Merged interests: ${allInterests.slice(0, 5).map(i => `${i.categoryName}(${i.weight.toFixed(2)})`).join(', ')}`);
+
+      // 5. Get videos user has already watched (to filter or deprioritize)
+      const watchedVideoIds = await this.watchHistoryService.getWatchedVideoIds(userId.toString(), 100);
+
+      // 6. Get all ready, non-hidden videos
+      const allVideos = await this.videoRepository.find({
+        where: {
+          status: VideoStatus.READY,
+          isHidden: false,
+        },
+        order: { createdAt: 'DESC' },
+        take: limit * 3, // Get more videos to score and filter
+      });
+
+      if (allVideos.length === 0) {
+        return [];
+      }
+
+      // 7. Score each video with new algorithm
+      const scoredVideos = await this.scoreVideosAdvanced(allVideos, allInterests, userId, watchedVideoIds);
+
+      // 8. Sort by score (highest first)
+      scoredVideos.sort((a, b) => b.score - a.score);
+
+      // 9. Take top N videos
+      const topVideos = scoredVideos.slice(0, limit);
+
+      // 10. Add engagement counts
+      const videosWithCounts = await this.addEngagementCounts(topVideos.map(sv => sv.video));
+
+      console.log(`✅ Generated ${videosWithCounts.length} recommendations for user ${userId}`);
+
+      // Cache for 2 minutes
+      await this.cacheManager.set(cacheKey, videosWithCounts, 120000);
+
+      return videosWithCounts;
+    } catch (error) {
+      console.error('❌ Error generating recommendations:', error);
+      // Fallback to chronological feed
+      return this.getFallbackVideos(limit);
+    }
+  }
+
+  /**
+   * Get user interests from user-service
+   */
+  private async getUserInterests(userId: number): Promise<UserInterest[]> {
+    try {
+      const userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3000';
+      const response = await firstValueFrom(
+        this.httpService.get(`${userServiceUrl}/users/${userId}/interests`)
+      );
+      return response.data.data || [];
+    } catch (error) {
+      console.log(`⚠️ Could not fetch user interests: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Get implicit interests from user's liked videos
+   */
+  private async getImplicitInterests(userId: number): Promise<UserInterest[]> {
+    try {
+      // Get user's liked video IDs
+      const likes = await this.likeRepository.find({
+        where: { userId: userId.toString() },
+        order: { createdAt: 'DESC' },
+        take: 50, // Last 50 liked videos
+      });
+
+      if (likes.length === 0) return [];
+
+      const videoIds = likes.map(l => l.videoId);
+
+      // Get categories of liked videos
+      const videoCategories = await this.videoCategoryRepository.find({
+        where: { videoId: In(videoIds) },
+        relations: ['category'],
+      });
+
+      // Count category occurrences
+      const categoryCount: Map<number, { name: string; count: number }> = new Map();
+      for (const vc of videoCategories) {
+        if (vc.category) {
+          const existing = categoryCount.get(vc.categoryId) || { name: vc.category.displayName, count: 0 };
+          existing.count++;
+          categoryCount.set(vc.categoryId, existing);
+        }
+      }
+
+      // Convert to interests with weight based on frequency
+      const maxCount = Math.max(...Array.from(categoryCount.values()).map(v => v.count));
+      const interests: UserInterest[] = [];
+      
+      categoryCount.forEach((value, categoryId) => {
+        interests.push({
+          categoryId,
+          categoryName: value.name,
+          weight: value.count / maxCount, // Normalize weight 0-1
+        });
+      });
+
+      return interests;
+    } catch (error) {
+      console.log(`⚠️ Could not calculate implicit interests: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Get interests from watch time (NEW)
+   */
+  private async getWatchTimeInterests(userId: number): Promise<UserInterest[]> {
+    try {
+      const watchInterests = await this.watchHistoryService.getWatchTimeBasedInterests(userId.toString());
+      return watchInterests.map(wi => ({
+        categoryId: wi.categoryId,
+        categoryName: wi.categoryName,
+        weight: wi.weight,
+      }));
+    } catch (error) {
+      console.log(`⚠️ Could not get watch time interests: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Merge all interest sources with different weights
+   * Priority: Watch Time > Explicit > Likes
+   */
+  private mergeAllInterests(
+    explicit: UserInterest[],
+    likeBased: UserInterest[],
+    watchTime: UserInterest[],
+  ): UserInterest[] {
+    const merged: Map<number, UserInterest> = new Map();
+
+    // Watch time interests get highest weight (most reliable signal)
+    for (const interest of watchTime) {
+      merged.set(interest.categoryId, {
+        ...interest,
+        weight: interest.weight * 1.5, // 50% boost for watch time
+      });
+    }
+
+    // Explicit interests (user selected)
+    for (const interest of explicit) {
+      const existing = merged.get(interest.categoryId);
+      if (existing) {
+        existing.weight += interest.weight * 1.3; // Combine with boost
+      } else {
+        merged.set(interest.categoryId, {
+          ...interest,
+          weight: interest.weight * 1.3,
+        });
+      }
+    }
+
+    // Like-based interests (lower weight)
+    for (const interest of likeBased) {
+      const existing = merged.get(interest.categoryId);
+      if (existing) {
+        existing.weight += interest.weight * 0.8;
+      } else {
+        merged.set(interest.categoryId, {
+          ...interest,
+          weight: interest.weight * 0.8,
+        });
+      }
+    }
+
+    // Normalize and sort
+    const interests = Array.from(merged.values());
+    const maxWeight = Math.max(...interests.map(i => i.weight), 1);
+    for (const interest of interests) {
+      interest.weight = interest.weight / maxWeight;
+    }
+
+    return interests.sort((a, b) => b.weight - a.weight);
+  }
+
+  /**
+   * Score videos with advanced algorithm
+   */
+  private async scoreVideosAdvanced(
+    videos: Video[],
+    interests: UserInterest[],
+    userId: number,
+    watchedVideoIds: string[],
+  ): Promise<ScoredVideo[]> {
+    const now = new Date();
+    const scoredVideos: ScoredVideo[] = [];
+    const watchedSet = new Set(watchedVideoIds);
+
+    // Pre-fetch all video categories
+    const videoIds = videos.map(v => v.id);
+    const allVideoCategories = await this.videoCategoryRepository.find({
+      where: { videoId: In(videoIds) },
+    });
+
+    // Create a map of videoId -> categoryIds
+    const videoCategoryMap: Map<string, number[]> = new Map();
+    for (const vc of allVideoCategories) {
+      const categories = videoCategoryMap.get(vc.videoId) || [];
+      categories.push(vc.categoryId);
+      videoCategoryMap.set(vc.videoId, categories);
+    }
+
+    // Create interest lookup map
+    const interestMap: Map<number, number> = new Map();
+    for (const interest of interests) {
+      interestMap.set(interest.categoryId, interest.weight);
+    }
+
+    for (const video of videos) {
+      // Skip user's own videos
+      if (video.userId === userId.toString()) {
+        continue;
+      }
+
+      const videoCategories = videoCategoryMap.get(video.id) || [];
+      let score = 0;
+      const matchedCategories: number[] = [];
+
+      // 1. Interest Match Score (0.35)
+      let interestScore = 0;
+      for (const categoryId of videoCategories) {
+        const weight = interestMap.get(categoryId);
+        if (weight) {
+          interestScore += weight;
+          matchedCategories.push(categoryId);
+        }
+      }
+      // Normalize interest score (max 1)
+      interestScore = Math.min(interestScore / Math.max(interests.length, 1), 1);
+      score += interestScore * WEIGHTS.INTEREST_MATCH;
+
+      // 2. Engagement Score (0.25)
+      const engagementScore = this.calculateEngagementScore(video);
+      score += engagementScore * WEIGHTS.ENGAGEMENT;
+
+      // 3. Recency Score (0.20) - Videos from last 7 days get higher scores
+      const ageInDays = (now.getTime() - new Date(video.createdAt).getTime()) / (1000 * 60 * 60 * 24);
+      const recencyScore = Math.max(0, 1 - (ageInDays / 7)); // Linear decay over 7 days
+      score += recencyScore * WEIGHTS.RECENCY;
+
+      // 4. Exploration/Random Score (0.15) - Increased for better discovery
+      // Also gives slight boost to categories user hasn't seen much
+      let explorationScore = Math.random();
+      if (videoCategories.length > 0 && matchedCategories.length === 0) {
+        // Boost videos from categories user hasn't explored
+        explorationScore = Math.min(explorationScore + 0.3, 1);
+      }
+      score += explorationScore * WEIGHTS.EXPLORATION;
+
+      // 5. Freshness Score (0.05) - Bonus for videos user hasn't seen
+      const freshnessScore = watchedSet.has(video.id) ? 0 : 1;
+      score += freshnessScore * WEIGHTS.FRESHNESS;
+
+      scoredVideos.push({
+        video,
+        score,
+        matchedCategories,
+      });
+    }
+
+    return scoredVideos;
+  }
+
+  /**
+   * Merge explicit and implicit interests (legacy method for compatibility)
+   */
+  private mergeInterests(explicit: UserInterest[], implicit: UserInterest[]): UserInterest[] {
+    return this.mergeAllInterests(explicit, implicit, []);
+  }
+
+  /**
+   * Score videos based on multiple factors (legacy method)
+   */
+  private async scoreVideos(
+    videos: Video[],
+    interests: UserInterest[],
+    userId: number,
+  ): Promise<ScoredVideo[]> {
+    return this.scoreVideosAdvanced(videos, interests, userId, []);
+  }
+
+  /**
+   * Calculate engagement score based on views, likes ratio
+   */
+  private calculateEngagementScore(video: Video): number {
+    const viewCount = video.viewCount || 1;
+    // Normalize view count (log scale to handle viral videos)
+    const normalizedViews = Math.log10(viewCount + 1) / 6; // Assume 1M views = max
+    return Math.min(normalizedViews, 1);
+  }
+
+  /**
+   * Add engagement counts to videos
+   */
+  private async addEngagementCounts(videos: Video[]): Promise<any[]> {
+    return Promise.all(
+      videos.map(async (video) => {
+        const likeCount = await this.likesService.getLikeCount(video.id);
+        const commentCount = await this.commentsService.getCommentCount(video.id);
+        const saveCount = await this.savedVideosService.getSaveCount(video.id);
+        const shareCount = await this.sharesService.getShareCount(video.id);
+        const categories = await this.categoriesService.getVideoCategories(video.id);
+
+        return {
+          ...video,
+          likeCount,
+          commentCount,
+          saveCount,
+          shareCount,
+          categories,
+        };
+      }),
+    );
+  }
+
+  /**
+   * Fallback to chronological feed when recommendation fails
+   */
+  private async getFallbackVideos(limit: number): Promise<any[]> {
+    const videos = await this.videoRepository.find({
+      where: {
+        status: VideoStatus.READY,
+        isHidden: false,
+      },
+      order: { createdAt: 'DESC' },
+      take: limit,
+    });
+
+    return this.addEngagementCounts(videos);
+  }
+
+  /**
+   * Get videos for new users (no interests selected yet)
+   * Shows trending/popular videos
+   */
+  async getTrendingVideos(limit: number = 50): Promise<any[]> {
+    const cacheKey = `trending:${limit}`;
+    
+    const cached = await this.cacheManager.get(cacheKey);
+    if (cached) {
+      return cached as any[];
+    }
+
+    console.log('📈 Fetching trending videos...');
+
+    // Get videos sorted by engagement (view count for now)
+    const videos = await this.videoRepository.find({
+      where: {
+        status: VideoStatus.READY,
+        isHidden: false,
+      },
+      order: { viewCount: 'DESC', createdAt: 'DESC' },
+      take: limit,
+    });
+
+    const videosWithCounts = await this.addEngagementCounts(videos);
+
+    // Cache for 5 minutes
+    await this.cacheManager.set(cacheKey, videosWithCounts, 300000);
+
+    return videosWithCounts;
+  }
+
+  /**
+   * Get videos by category
+   */
+  async getVideosByCategory(categoryId: number, limit: number = 50): Promise<any[]> {
+    const videoIds = await this.categoriesService.getVideoIdsByCategory(categoryId, limit);
+    
+    if (videoIds.length === 0) return [];
+
+    const videos = await this.videoRepository.find({
+      where: {
+        id: In(videoIds),
+        status: VideoStatus.READY,
+        isHidden: false,
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    return this.addEngagementCounts(videos);
+  }
+
+  /**
+   * Invalidate user's recommendation cache (call when user likes/saves a video)
+   */
+  async invalidateUserCache(userId: number): Promise<void> {
+    const cacheKey = `recommendations:${userId}:*`;
+    // Simple invalidation - just delete the default key
+    await this.cacheManager.del(`recommendations:${userId}:50`);
+    console.log(`🗑️ Invalidated recommendation cache for user ${userId}`);
+  }
+}

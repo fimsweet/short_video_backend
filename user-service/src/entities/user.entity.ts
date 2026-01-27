@@ -50,6 +50,10 @@ export class User {
   @Column({ type: 'simple-array', nullable: true })
   twoFactorMethods: string[] | null; // ['email', 'sms', 'app']
 
+  // Online Status
+  @Column({ type: 'datetime', nullable: true })
+  lastSeen: Date | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

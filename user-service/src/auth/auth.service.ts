@@ -108,7 +108,7 @@ export class AuthService {
         // Email exists - this means user linked their Google email to an existing account
         // Allow login and update their Google providerId for future logins
         await this.usersService.linkGoogleToExistingAccount(existingUser.id, googleUser.providerId);
-        
+
         const { password: _, ...userResult } = existingUser;
         const token = await this._generateToken(existingUser);
         console.log(`✅ Google login linked to existing account: ${existingUser.username}`);
@@ -226,6 +226,7 @@ export class AuthService {
       firebaseUid: uid,
       dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : undefined,
       fullName: dto.fullName,
+      language: dto.language,
     });
 
     const token = await this._generateToken(user);
@@ -366,7 +367,7 @@ export class AuthService {
 
     // Generate and store OTP
     const otp = await this.otpService.createOtp(phone, 'phone_password_reset');
-    
+
     // For now, just return success - in production, you'd send SMS
     // Firebase Phone Auth handles SMS sending on the client side
     console.log(`📱 Phone password reset OTP for ${phone}: ${otp}`);
@@ -382,7 +383,7 @@ export class AuthService {
   async resetPasswordWithPhone(phone: string, firebaseIdToken: string, newPassword: string) {
     // Verify Firebase token and get phone number
     const { uid, phone: verifiedPhone } = await this.firebaseAdminService.verifyPhoneToken(firebaseIdToken);
-    
+
     // Make sure the phone matches
     if (verifiedPhone !== phone) {
       throw new BadRequestException('Số điện thoại không khớp');
@@ -444,7 +445,7 @@ export class AuthService {
       throw new BadRequestException(result.message);
     }
 
-    const message = password 
+    const message = password
       ? 'Email đã được liên kết thành công. Bạn có thể đăng nhập bằng email và mật khẩu này.'
       : 'Email đã được cập nhật thành công.';
 
@@ -497,12 +498,12 @@ export class AuthService {
   // Check if phone is available for linking (not used by another account)
   async checkPhoneForLink(userId: number, phone: string) {
     const existingUser = await this.usersService.findByPhone(phone);
-    
+
     // Phone is available if:
     // 1. No one has it, OR
     // 2. Current user already has it (editing their own phone)
     const available = !existingUser || existingUser.id === userId;
-    
+
     return {
       available,
       phone,
@@ -526,7 +527,7 @@ export class AuthService {
     // Validate methods
     const validMethods = ['email', 'sms'];
     const filteredMethods = methods.filter(m => validMethods.includes(m));
-    
+
     const result = await this.usersService.update2FASettings(userId, enabled, filteredMethods);
     if (!result.success) {
       throw new BadRequestException(result.message);
@@ -545,17 +546,17 @@ export class AuthService {
       if (!user.email || user.email.endsWith('@phone.user')) {
         throw new BadRequestException('Tài khoản chưa liên kết email');
       }
-      
+
       // Generate and send OTP to email
       const otp = await this.otpService.createOtp(user.email, '2fa');
       const sent = await this.emailService.sendOtpEmail(user.email, otp);
-      
+
       if (!sent) {
         throw new BadRequestException('Không thể gửi email xác thực');
       }
-      
+
       console.log(`📧 2FA OTP sent to ${user.email}: ${otp}`);
-      
+
       // Mask email for display
       const maskedEmail = user.email.replace(/(.{2})(.*)(@.*)/, '$1***$3');
       return {
@@ -567,7 +568,7 @@ export class AuthService {
       if (!user.phoneNumber) {
         throw new BadRequestException('Tài khoản chưa liên kết số điện thoại');
       }
-      
+
       // For SMS, we use Firebase Phone Auth on client side
       // Just return success to indicate SMS method is available
       const maskedPhone = user.phoneNumber.replace(/(.{4})(.*)(.{2})/, '$1***$3');
@@ -593,14 +594,14 @@ export class AuthService {
       if (!user.email) {
         throw new BadRequestException('Tài khoản chưa liên kết email');
       }
-      
+
       // Verify OTP
       await this.otpService.verifyOtp(user.email, otp, '2fa');
-      
+
       // Generate JWT token
       const payload = { sub: user.id, username: user.username };
       const token = this.jwtService.sign(payload);
-      
+
       return {
         success: true,
         message: 'Xác thực thành công',
@@ -630,13 +631,13 @@ export class AuthService {
       if (!user.email) {
         throw new BadRequestException('Tài khoản chưa liên kết email');
       }
-      
+
       // Create and send OTP
       await this.otpService.createOtp(user.email, '2fa_settings');
-      
+
       // Mask email
       const maskedEmail = user.email.replace(/(.{2})(.*)(?=@)/, (_, a, b) => a + '*'.repeat(b.length));
-      
+
       return {
         success: true,
         message: `Đã gửi mã xác thực đến ${maskedEmail}`,
@@ -648,10 +649,10 @@ export class AuthService {
       if (!user.phoneNumber) {
         throw new BadRequestException('Tài khoản chưa liên kết số điện thoại');
       }
-      
+
       // Mask phone
       const maskedPhone = user.phoneNumber.replace(/(\+\d{2})(\d+)(\d{3})/, (_, a, b, c) => a + '*'.repeat(b.length) + c);
-      
+
       return {
         success: true,
         message: `Xác thực qua số ${maskedPhone}`,
@@ -681,7 +682,7 @@ export class AuthService {
       if (!user.email) {
         throw new BadRequestException('Tài khoản chưa liên kết email');
       }
-      
+
       // Verify OTP
       await this.otpService.verifyOtp(user.email, otp, '2fa_settings');
     } else if (method === 'sms') {
@@ -695,12 +696,12 @@ export class AuthService {
     // Update 2FA settings
     const validMethods = ['email', 'sms'];
     const filteredMethods = methods.filter(m => validMethods.includes(m));
-    
+
     const result = await this.usersService.update2FASettings(userId, enabled, filteredMethods);
     if (!result.success) {
       throw new BadRequestException(result.message);
     }
-    
+
     return {
       success: true,
       message: enabled ? 'Đã bật xác thực 2 bước' : 'Đã tắt xác thực 2 bước',

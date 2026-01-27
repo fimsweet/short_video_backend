@@ -2,6 +2,8 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { HttpService } from '@nestjs/axios';
+import { firstValueFrom } from 'rxjs';
 import * as amqp from 'amqplib';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -15,15 +17,18 @@ export class VideoProcessorService implements OnModuleInit {
   private rabbitMQUrl: string;
   private queueName: string;
   private processedDir: string;
+  private videoServiceUrl: string;
 
   constructor(
     @InjectRepository(Video)
     private videoRepository: Repository<Video>,
     private configService: ConfigService,
+    private httpService: HttpService,
   ) {
     this.rabbitMQUrl = this.configService.get<string>('RABBITMQ_URL') || 'amqp://admin:password@localhost:5672';
     this.queueName = this.configService.get<string>('RABBITMQ_QUEUE') || 'video_processing_queue';
     this.processedDir = this.configService.get<string>('PROCESSED_VIDEOS_PATH') || './processed_videos';
+    this.videoServiceUrl = this.configService.get<string>('VIDEO_SERVICE_URL') || 'http://localhost:3002';
   }
 
   async onModuleInit() {
@@ -137,6 +142,9 @@ export class VideoProcessorService implements OnModuleInit {
         thumbnailUrl: thumbnailUrl,
         aspectRatio: originalAspectRatio,
       });
+
+      // 7. Notify video-service to invalidate cache
+      await this.notifyProcessingComplete(videoId, video.userId);
 
       console.log(`\n${'='.repeat(60)}`);
       console.log(`✅ VIDEO PROCESSING COMPLETED: ${videoId}`);
@@ -273,5 +281,25 @@ export class VideoProcessorService implements OnModuleInit {
         })
         .run();
     });
+  }
+
+  // Notify video-service to invalidate cache after processing
+  private async notifyProcessingComplete(videoId: string, userId: string): Promise<void> {
+    try {
+      console.log(`🔄 Notifying video-service to invalidate cache for video ${videoId}...`);
+      
+      await firstValueFrom(
+        this.httpService.post(
+          `${this.videoServiceUrl}/videos/${videoId}/processing-complete`,
+          { userId },
+          { timeout: 5000 }
+        )
+      );
+      
+      console.log(`✅ Video-service cache invalidated for video ${videoId}`);
+    } catch (error) {
+      // Log error but don't fail the processing - cache will eventually expire
+      console.error(`⚠️ Failed to notify video-service for cache invalidation:`, error.message);
+    }
   }
 }

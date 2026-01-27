@@ -10,6 +10,7 @@ import { FollowsModule } from './follows/follows.module';
 import { RedisCacheModule } from './config/redis-cache.module';
 import { HealthModule } from './health/health.module';
 import { EmailModule } from './config/email.module';
+import { UserInterestsModule } from './user-interests/user-interests.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { EmailModule } from './config/email.module';
     AuthModule,
     UsersModule,
     FollowsModule,
+    UserInterestsModule, // ✅ User interests for recommendations
   ],
   controllers: [AppController],
   providers: [AppService],

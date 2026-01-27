@@ -1,4 +1,5 @@
-import { IsString, IsOptional, IsNotEmpty } from 'class-validator';
+import { IsString, IsOptional, IsNotEmpty, IsArray, IsNumber } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class UploadVideoDto {
   @IsString()
@@ -12,4 +13,19 @@ export class UploadVideoDto {
   @IsString()
   @IsOptional()
   description?: string;
+
+  @IsArray()
+  @IsOptional()
+  @Transform(({ value }) => {
+    // Handle string input (from form-data)
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return value.split(',').map(Number).filter(n => !isNaN(n));
+      }
+    }
+    return value;
+  })
+  categoryIds?: number[];
 }

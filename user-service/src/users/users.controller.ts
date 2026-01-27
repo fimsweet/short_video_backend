@@ -250,4 +250,18 @@ export class UsersController {
     );
     return { isBlocked };
   }
+
+  // Update user's lastSeen timestamp (call this when user is active)
+  @Post(':userId/heartbeat')
+  async updateHeartbeat(@Param('userId') userId: string) {
+    await this.usersService.updateLastSeen(parseInt(userId, 10));
+    return { success: true };
+  }
+
+  // Get user's online status
+  @Get(':userId/online-status')
+  async getOnlineStatus(@Param('userId') userId: string) {
+    const status = await this.usersService.getOnlineStatus(parseInt(userId, 10));
+    return { success: true, ...status };
+  }
 }

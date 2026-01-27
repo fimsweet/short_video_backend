@@ -914,4 +914,60 @@ export class UsersService {
     const user = await this.userRepository.findOne({ where: { phoneNumber: phone } });
     return !!user;
   }
+
+  // Update user's lastSeen timestamp
+  async updateLastSeen(userId: number): Promise<void> {
+    try {
+      await this.userRepository.update(userId, { lastSeen: new Date() });
+      // Invalidate cache
+      await this.cacheManager.del(`user:id:${userId}`);
+    } catch (error) {
+      console.error(`❌ Error updating lastSeen for user ${userId}:`, error);
+    }
+  }
+
+  // Get user's online status
+  async getOnlineStatus(userId: number): Promise<{ isOnline: boolean; lastSeen: Date | null; statusText: string }> {
+    try {
+      const user = await this.userRepository.findOne({ 
+        where: { id: userId },
+        select: ['id', 'lastSeen'],
+      });
+
+      if (!user) {
+        return { isOnline: false, lastSeen: null, statusText: 'Offline' };
+      }
+
+      const lastSeen = user.lastSeen;
+      if (!lastSeen) {
+        return { isOnline: false, lastSeen: null, statusText: 'Offline' };
+      }
+
+      const now = new Date();
+      const diffMs = now.getTime() - new Date(lastSeen).getTime();
+      const diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+      // Consider online if lastSeen within 2 minutes
+      if (diffMinutes < 2) {
+        return { isOnline: true, lastSeen, statusText: 'Online' };
+      }
+
+      // Generate human-readable status
+      let statusText: string;
+      if (diffMinutes < 60) {
+        statusText = `${diffMinutes} phút trước`;
+      } else if (diffMinutes < 1440) { // Less than 24 hours
+        const hours = Math.floor(diffMinutes / 60);
+        statusText = `${hours} giờ trước`;
+      } else {
+        const days = Math.floor(diffMinutes / 1440);
+        statusText = `${days} ngày trước`;
+      }
+
+      return { isOnline: false, lastSeen, statusText };
+    } catch (error) {
+      console.error(`❌ Error getting online status for user ${userId}:`, error);
+      return { isOnline: false, lastSeen: null, statusText: 'Offline' };
+    }
+  }
 }
