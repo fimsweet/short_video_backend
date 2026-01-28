@@ -8,6 +8,7 @@ import * as amqp from 'amqplib';
 import * as path from 'path';
 import * as fs from 'fs';
 import { Video, VideoStatus } from '../entities/video.entity';
+import { StorageService } from '../config/storage.service';
 
 // Import fluent-ffmpeg correctly
 const ffmpeg = require('fluent-ffmpeg');
@@ -24,6 +25,7 @@ export class VideoProcessorService implements OnModuleInit {
     private videoRepository: Repository<Video>,
     private configService: ConfigService,
     private httpService: HttpService,
+    private storageService: StorageService,
   ) {
     this.rabbitMQUrl = this.configService.get<string>('RABBITMQ_URL') || 'amqp://admin:password@localhost:5672';
     this.queueName = this.configService.get<string>('RABBITMQ_QUEUE') || 'video_processing_queue';
@@ -131,11 +133,29 @@ export class VideoProcessorService implements OnModuleInit {
 
       // 5. Tạo thumbnail từ video
       console.log(`📸 Generating thumbnail...`);
-      const thumbnailPath = await this.generateThumbnail(inputPath, outputDir);
-      const thumbnailUrl = thumbnailPath ? `/uploads/processed_videos/${outputFileName}/thumbnail.jpg` : null;
+      await this.generateThumbnail(inputPath, outputDir);
 
-      // 6. Cập nhật database với aspect ratio và thumbnail
-      const hlsUrl = `/uploads/processed_videos/${outputFileName}/playlist.m3u8`;
+      // 6. Upload to S3 or use local paths
+      let hlsUrl: string;
+      let thumbnailUrl: string | null;
+
+      if (this.storageService.isEnabled()) {
+        // Upload to AWS S3
+        console.log(`☁️ Uploading to S3...`);
+        const uploadResult = await this.storageService.uploadProcessedVideo(outputDir, videoId);
+        hlsUrl = uploadResult.hlsUrl;
+        thumbnailUrl = uploadResult.thumbnailUrl;
+
+        // Clean up local files after S3 upload
+        console.log(`🧹 Cleaning up local files...`);
+        fs.rmSync(outputDir, { recursive: true, force: true });
+      } else {
+        // Use local paths
+        hlsUrl = `/uploads/processed_videos/${outputFileName}/playlist.m3u8`;
+        thumbnailUrl = `/uploads/processed_videos/${outputFileName}/thumbnail.jpg`;
+      }
+
+      // 7. Cập nhật database với aspect ratio và thumbnail
       await this.videoRepository.update(videoId, {
         status: VideoStatus.READY,
         hlsUrl: hlsUrl,
@@ -143,7 +163,7 @@ export class VideoProcessorService implements OnModuleInit {
         aspectRatio: originalAspectRatio,
       });
 
-      // 7. Notify video-service to invalidate cache
+      // 8. Notify video-service to invalidate cache
       await this.notifyProcessingComplete(videoId, video.userId);
 
       console.log(`\n${'='.repeat(60)}`);

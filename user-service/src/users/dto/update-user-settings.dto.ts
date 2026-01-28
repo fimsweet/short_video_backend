@@ -3,6 +3,7 @@ export class UpdateUserSettingsDto {
   notificationsEnabled?: boolean;
   pushNotifications?: boolean;
   emailNotifications?: boolean;
+  loginAlertsEnabled?: boolean; // Push notifications for new login events
   accountPrivacy?: string;
   showOnlineStatus?: boolean;
   autoplayVideos?: boolean;

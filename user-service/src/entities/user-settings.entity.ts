@@ -27,6 +27,9 @@ export class UserSettings {
   @Column({ default: true })
   emailNotifications: boolean;
 
+  @Column({ default: true })
+  loginAlertsEnabled: boolean; // Push notifications for new login events
+
   // Privacy settings
   @Column({ default: 'public', length: 50 })
   accountPrivacy: string; // 'public', 'private', 'friends'

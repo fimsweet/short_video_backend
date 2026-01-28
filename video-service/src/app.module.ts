@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { RedisCacheModule } from './config/redis-cache.module';
+import { StorageModule } from './config/storage.module';
+import { ActivityLoggerModule } from './config/activity-logger.module';
 import { HealthModule } from './health/health.module';
 import { VideosModule } from './videos/videos.module';
 import { LikesModule } from './likes/likes.module';
@@ -14,6 +16,7 @@ import { CategoriesModule } from './categories/categories.module';
 import { RecommendationModule } from './recommendation/recommendation.module';
 import { WatchHistoryModule } from './watch-history/watch-history.module';
 import { SearchModule } from './search/search.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 import { getDatabaseConfig } from './config/database.config';
 
 @Module({
@@ -28,6 +31,8 @@ import { getDatabaseConfig } from './config/database.config';
       inject: [ConfigService],
     }),
     RedisCacheModule, // Redis cache global
+    StorageModule, // AWS S3 storage (global)
+    ActivityLoggerModule, // ✅ Activity logging (global)
     HealthModule, // Health check endpoints
     VideosModule,
     LikesModule,
@@ -40,6 +45,7 @@ import { getDatabaseConfig } from './config/database.config';
     RecommendationModule, // ✅ Video recommendations
     WatchHistoryModule, // ✅ Watch time tracking for recommendations
     SearchModule, // ✅ Elasticsearch search
+    AnalyticsModule, // ✅ Creator analytics
   ],
 })
-export class AppModule {}
+export class AppModule { }

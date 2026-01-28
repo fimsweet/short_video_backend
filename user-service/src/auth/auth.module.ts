@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { UsersModule } from '../users/users.module';
@@ -9,12 +9,14 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { OtpModule } from '../otp/otp.module';
 import { FirebaseAdminService } from './firebase-admin.service';
 import { EmailService } from '../config/email.service';
+import { SessionsModule } from '../sessions/sessions.module';
 
 @Module({
   imports: [
     UsersModule,
     PassportModule,
     OtpModule,
+    forwardRef(() => SessionsModule),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

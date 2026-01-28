@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Message } from '../entities/message.entity';
 import { Conversation } from '../entities/conversation.entity';
+import { PushNotificationService } from '../notifications/push-notification.service';
 
 @Injectable()
 export class MessagesService {
@@ -11,6 +12,7 @@ export class MessagesService {
     private messageRepository: Repository<Message>,
     @InjectRepository(Conversation)
     private conversationRepository: Repository<Conversation>,
+    private pushNotificationService: PushNotificationService,
   ) {}
 
   private getConversationId(userId1: string, userId2: string): string {
@@ -50,7 +52,17 @@ export class MessagesService {
       isRead: false,
     });
 
-    return this.messageRepository.save(message);
+    const savedMessage = await this.messageRepository.save(message);
+
+    // Send push notification for new message
+    this.pushNotificationService.sendMessageNotification(
+      recipientId,
+      senderId, // Will be replaced with actual sender name in real usage
+      content,
+      conversationId,
+    );
+
+    return savedMessage;
   }
 
   async getMessages(userId1: string, userId2: string, limit: number = 50, offset: number = 0): Promise<any[]> {

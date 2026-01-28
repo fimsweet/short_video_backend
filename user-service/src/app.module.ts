@@ -11,6 +11,9 @@ import { RedisCacheModule } from './config/redis-cache.module';
 import { HealthModule } from './health/health.module';
 import { EmailModule } from './config/email.module';
 import { UserInterestsModule } from './user-interests/user-interests.module';
+import { ActivityHistoryModule } from './activity-history/activity-history.module';
+import { SessionsModule } from './sessions/sessions.module';
+import { PushModule } from './push/push.module';
 
 @Module({
   imports: [
@@ -26,8 +29,11 @@ import { UserInterestsModule } from './user-interests/user-interests.module';
     UsersModule,
     FollowsModule,
     UserInterestsModule, // ✅ User interests for recommendations
+    ActivityHistoryModule, // ✅ Activity history tracking
+    SessionsModule, // ✅ Device sessions management
+    PushModule, // ✅ Push notifications endpoint
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }

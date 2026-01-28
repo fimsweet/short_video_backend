@@ -95,6 +95,29 @@ export class UsersController {
     return result;
   }
 
+  // Check if user has password (for OAuth users to know if they need to set or change password)
+  // IMPORTANT: This route MUST be before :username to avoid being matched as a username
+  @Get('has-password')
+  @UseGuards(JwtAuthGuard)
+  async hasPassword(@Request() req) {
+    try {
+      const userId = req.user.userId;
+      console.log(`🔐 Checking hasPassword for userId: ${userId}`);
+      
+      if (!userId) {
+        console.error('❌ userId is undefined in request');
+        return { success: false, hasPassword: false, error: 'Invalid user' };
+      }
+      
+      const hasPassword = await this.usersService.hasPassword(userId);
+      console.log(`🔐 hasPassword result for userId ${userId}: ${hasPassword}`);
+      return { success: true, hasPassword };
+    } catch (error) {
+      console.error('❌ Error in hasPassword endpoint:', error);
+      return { success: false, hasPassword: false, error: error.message };
+    }
+  }
+
   @Get(':username')
   findOne(@Param('username') username: string) {
     return this.usersService.findOne(username);
@@ -158,15 +181,6 @@ export class UsersController {
       body.newPassword,
     );
     return result;
-  }
-
-  // Check if user has password (for OAuth users to know if they need to set or change password)
-  @Get('has-password')
-  @UseGuards(JwtAuthGuard)
-  async hasPassword(@Request() req) {
-    const userId = req.user.userId;
-    const hasPassword = await this.usersService.hasPassword(userId);
-    return { success: true, hasPassword };
   }
 
   // Set password for OAuth users (who don't have password yet)
@@ -263,5 +277,35 @@ export class UsersController {
   async getOnlineStatus(@Param('userId') userId: string) {
     const status = await this.usersService.getOnlineStatus(parseInt(userId, 10));
     return { success: true, ...status };
+  }
+
+  // ============= ACCOUNT DEACTIVATION =============
+
+  // Deactivate account
+  @UseGuards(JwtAuthGuard)
+  @Post('deactivate')
+  async deactivateAccount(
+    @Request() req,
+    @Body() body: { password: string },
+  ) {
+    const userId = req.user.userId;
+    const result = await this.usersService.deactivateAccount(userId, body.password);
+    return result;
+  }
+
+  // Reactivate account (used during login flow)
+  @Post('reactivate')
+  async reactivateAccount(
+    @Body() body: { email?: string; username?: string; password: string },
+  ) {
+    const result = await this.usersService.reactivateAccount(body);
+    return result;
+  }
+
+  // Check if account is deactivated (public endpoint for login flow)
+  @Get('check-deactivated/:identifier')
+  async checkDeactivated(@Param('identifier') identifier: string) {
+    const status = await this.usersService.checkDeactivatedStatus(identifier);
+    return status;
   }
 }

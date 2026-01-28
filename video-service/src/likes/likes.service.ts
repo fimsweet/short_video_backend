@@ -6,6 +6,7 @@ import { Video } from '../entities/video.entity';
 import { CommentsService } from '../comments/comments.service';
 import { SavedVideosService } from '../saved-videos/saved-videos.service';
 import { SharesService } from '../shares/shares.service';
+import { ActivityLoggerService } from '../config/activity-logger.service';
 
 @Injectable()
 export class LikesService {
@@ -20,11 +21,12 @@ export class LikesService {
     private savedVideosService: SavedVideosService,
     @Inject(forwardRef(() => SharesService))
     private sharesService: SharesService,
-  ) {}
+    private activityLoggerService: ActivityLoggerService,
+  ) { }
 
   async toggleLike(videoId: string, userId: string): Promise<{ liked: boolean; likeCount: number }> {
     console.log(`🔄 Toggle like: videoId=${videoId}, userId=${userId}`);
-    
+
     const existingLike = await this.likeRepository.findOne({
       where: { videoId, userId },
     });
@@ -32,6 +34,15 @@ export class LikesService {
     if (existingLike) {
       console.log('❌ Unlike - removing existing like');
       await this.likeRepository.remove(existingLike);
+
+      // Log unlike activity
+      this.activityLoggerService.logActivity({
+        userId: parseInt(userId),
+        actionType: 'unlike',
+        targetId: videoId,
+        targetType: 'video',
+      });
+
       const likeCount = await this.getLikeCount(videoId);
       return { liked: false, likeCount };
     } else {
@@ -40,6 +51,15 @@ export class LikesService {
         videoId,
         userId,
       });
+
+      // Log like activity
+      this.activityLoggerService.logActivity({
+        userId: parseInt(userId),
+        actionType: 'like',
+        targetId: videoId,
+        targetType: 'video',
+      });
+
       const likeCount = await this.getLikeCount(videoId);
       return { liked: true, likeCount };
     }
@@ -51,11 +71,11 @@ export class LikesService {
 
   async isLikedByUser(videoId: string, userId: string): Promise<boolean> {
     console.log(`🔍 [DB] Checking like: videoId=${videoId}, userId=${userId}`);
-    
+
     const like = await this.likeRepository.findOne({
       where: { videoId, userId },
     });
-    
+
     const liked = !!like;
     console.log(`✅ [DB] Like found: ${liked}`, like ? `(id: ${like.id})` : '');
     return liked;
@@ -70,7 +90,7 @@ export class LikesService {
 
   async getLikedVideosByUser(userId: string): Promise<any[]> {
     console.log(`🔍 Fetching liked videos for user: ${userId}`);
-    
+
     // Get all likes by this user
     const likes = await this.likeRepository.find({
       where: { userId },
@@ -93,7 +113,7 @@ export class LikesService {
       .getMany();
 
     console.log(`✅ Returning ${videos.length} videos (excluding user's own)`);
-    
+
     // Add counts for each video (like, comment, save, share)
     const videosWithCounts = await Promise.all(
       videos.map(async (video) => {

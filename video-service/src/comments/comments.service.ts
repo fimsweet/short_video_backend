@@ -5,6 +5,7 @@ import { Comment } from '../entities/comment.entity';
 import { CommentLike } from '../entities/comment-like.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../entities/notification.entity';
+import { ActivityLoggerService } from '../config/activity-logger.service';
 
 @Injectable()
 export class CommentsService {
@@ -15,7 +16,8 @@ export class CommentsService {
     private commentLikeRepository: Repository<CommentLike>,
     @Inject(forwardRef(() => NotificationsService))
     private notificationsService: NotificationsService,
-  ) {}
+    private activityLoggerService: ActivityLoggerService,
+  ) { }
 
   async createComment(videoId: string, userId: string, content: string, parentId?: string, imageUrl?: string | null): Promise<Comment> {
     // If replying to a reply, find the root parent comment
@@ -35,7 +37,7 @@ export class CommentsService {
       parentId: rootParentId ?? null,
       imageUrl: imageUrl ?? null,
     });
-    
+
     const savedComment = await this.commentRepository.save(comment);
 
     // Create notification for video owner
@@ -45,7 +47,7 @@ export class CommentsService {
         'SELECT id, userId FROM videos WHERE id = ?',
         [videoId]
       );
-      
+
       if (videos && videos.length > 0) {
         const video = videos[0];
         if (video.userId !== userId) {
@@ -63,15 +65,24 @@ export class CommentsService {
       console.error('Error creating comment notification:', e);
     }
 
+    // Log comment activity
+    this.activityLoggerService.logActivity({
+      userId: parseInt(userId),
+      actionType: 'comment',
+      targetId: videoId,
+      targetType: 'video',
+      metadata: { content: content.substring(0, 100), commentId: savedComment.id },
+    });
+
     return savedComment;
   }
 
   async getCommentsByVideo(videoId: string): Promise<any[]> {
     const comments = await this.commentRepository.find({
       where: { videoId, parentId: IsNull() }, // FIXED: Use IsNull()
-      order: { 
+      order: {
         isPinned: 'DESC', // Pinned comments first
-        createdAt: 'DESC' 
+        createdAt: 'DESC'
       },
     });
 
@@ -141,28 +152,40 @@ export class CommentsService {
       return false;
     }
 
+    const videoId = comment.videoId;
+
     // Recursively delete all nested replies first
     await this.deleteRepliesRecursively(commentId);
-    
+
     // Delete comment likes
     await this.commentLikeRepository.delete({ commentId });
-    
+
     // Delete the comment
     await this.commentRepository.remove(comment);
+
+    // Log comment_deleted activity
+    this.activityLoggerService.logActivity({
+      userId: parseInt(userId),
+      actionType: 'comment_deleted',
+      targetId: videoId,
+      targetType: 'video',
+      metadata: { commentId },
+    });
+
     return true;
   }
 
   private async deleteRepliesRecursively(commentId: string): Promise<void> {
     // Get all direct replies
     const replies = await this.commentRepository.find({ where: { parentId: commentId } });
-    
+
     // For each reply, recursively delete its nested replies
     for (const reply of replies) {
       await this.deleteRepliesRecursively(reply.id);
       // Delete likes for this reply
       await this.commentLikeRepository.delete({ commentId: reply.id });
     }
-    
+
     // Delete all direct replies
     await this.commentRepository.delete({ parentId: commentId });
   }
@@ -197,12 +220,12 @@ export class CommentsService {
   async deleteAllCommentsForVideo(videoId: string): Promise<void> {
     // Get all comments for this video (including replies)
     const comments = await this.commentRepository.find({ where: { videoId } });
-    
+
     // Delete all comment likes for these comments
     for (const comment of comments) {
       await this.commentLikeRepository.delete({ commentId: comment.id });
     }
-    
+
     // Delete all comments
     await this.commentRepository.delete({ videoId });
     console.log(`🗑️ Deleted all comments and comment likes for video ${videoId}`);

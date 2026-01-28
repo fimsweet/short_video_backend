@@ -1,14 +1,31 @@
-import { Controller, Post, Body, ValidationPipe, UseGuards, Get, Request, Query } from '@nestjs/common';
+import { Controller, Post, Body, ValidationPipe, UseGuards, Get, Request, Query, Headers, Ip } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { OAuthRegisterDto, EmailRegisterDto, OAuthLoginDto } from './dto/oauth-login.dto';
 import { PhoneRegisterDto, PhoneLoginDto } from './dto/phone-register.dto';
 import { SendLinkEmailOtpDto, VerifyLinkEmailDto, LinkPhoneDto } from './dto/account-link.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { SessionsService } from '../sessions/sessions.service';
+import { DevicePlatform } from '../entities/user-session.entity';
+
+interface LoginDto {
+  username: string;
+  password: string;
+  deviceInfo?: {
+    platform?: DevicePlatform;
+    deviceName?: string;
+    deviceModel?: string;
+    osVersion?: string;
+    appVersion?: string;
+  };
+}
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) { }
+  constructor(
+    private readonly authService: AuthService,
+    private readonly sessionsService: SessionsService,
+  ) { }
 
   // Legacy register endpoint
   @Post('register')
@@ -65,8 +82,30 @@ export class AuthController {
   }
 
   @Post('login')
-  async login(@Body() loginDto: { username: string; password: string }) {
-    return this.authService.login(loginDto.username, loginDto.password);
+  async login(
+    @Body() loginDto: LoginDto,
+    @Ip() ipAddress: string,
+    @Headers('x-forwarded-for') forwardedFor: string,
+  ) {
+    const result = await this.authService.login(loginDto.username, loginDto.password);
+    
+    // If login successful and returns token, create session
+    if ('access_token' in result && 'user' in result && result.access_token && result.user) {
+      const clientIp = forwardedFor?.split(',')[0]?.trim() || ipAddress;
+      
+      await this.sessionsService.createSession({
+        userId: result.user.id,
+        token: result.access_token,
+        platform: loginDto.deviceInfo?.platform || 'unknown',
+        deviceName: loginDto.deviceInfo?.deviceName,
+        deviceModel: loginDto.deviceInfo?.deviceModel,
+        osVersion: loginDto.deviceInfo?.osVersion,
+        appVersion: loginDto.deviceInfo?.appVersion,
+        ipAddress: clientIp,
+      });
+    }
+    
+    return result;
   }
 
   @UseGuards(JwtAuthGuard)
@@ -110,6 +149,13 @@ export class AuthController {
   @Get('link/phone/check')
   async checkPhoneForLink(@Request() req, @Query('phone') phone: string) {
     return this.authService.checkPhoneForLink(req.user.userId, phone);
+  }
+
+  // Unlink phone from account
+  @UseGuards(JwtAuthGuard)
+  @Post('unlink/phone')
+  async unlinkPhone(@Request() req, @Body() dto: { password: string }) {
+    return this.authService.unlinkPhone(req.user.userId, dto.password);
   }
 
   // ============= TWO-FACTOR AUTHENTICATION =============

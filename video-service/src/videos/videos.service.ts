@@ -17,6 +17,7 @@ import { firstValueFrom } from 'rxjs';
 import { SharesService } from '../shares/shares.service';
 import { CategoriesService } from '../categories/categories.service';
 import { SearchService } from '../search/search.service';
+import { ActivityLoggerService } from '../config/activity-logger.service';
 
 @Injectable()
 export class VideosService {
@@ -41,6 +42,7 @@ export class VideosService {
     @Inject(forwardRef(() => CategoriesService))
     private categoriesService: CategoriesService,
     private searchService: SearchService,
+    private activityLoggerService: ActivityLoggerService,
   ) {
     this.rabbitMQUrl = this.configService.get<string>('RABBITMQ_URL') || 'amqp://admin:password@localhost:5672';
     this.queueName = this.configService.get<string>('RABBITMQ_QUEUE') || 'video_processing_queue';
@@ -90,6 +92,15 @@ export class VideosService {
       await this.cacheManager.del(`user_videos:${uploadVideoDto.userId}`);
       console.log(`✅ Cache invalidated for user ${uploadVideoDto.userId}`);
 
+      // 5. Log video_posted activity
+      this.activityLoggerService.logActivity({
+        userId: parseInt(uploadVideoDto.userId),
+        actionType: 'video_posted',
+        targetId: savedVideo.id,
+        targetType: 'video',
+        metadata: { title: uploadVideoDto.title },
+      });
+
       return savedVideo;
     } catch (error) {
       console.error('Error uploading video:', error);
@@ -100,13 +111,13 @@ export class VideosService {
   // Called by video-worker-service after processing completes
   async invalidateCacheAfterProcessing(videoId: string, userId: string): Promise<void> {
     console.log(`🔄 Invalidating cache after processing for video ${videoId}, user ${userId}`);
-    
+
     // Invalidate all relevant caches
     await this.cacheManager.del(`video:${videoId}`);
     await this.cacheManager.del(`user_videos:${userId}`);
     await this.cacheManager.del('all_videos:50');
     await this.cacheManager.del('all_videos:100');
-    
+
     console.log(`✅ Cache invalidated for video ${videoId}`);
   }
 
@@ -277,7 +288,7 @@ export class VideosService {
         console.log(`🔍 Using Elasticsearch for search: "${query}"`);
         const esResults = await this.searchService.searchVideos(query, limit);
         console.log(`🔍 Elasticsearch found ${esResults.length} videos for query: "${query}"`);
-        
+
         if (esResults.length > 0) {
           // Enrich with latest counts from DB
           const videosWithCounts = await Promise.all(
@@ -513,6 +524,15 @@ export class VideosService {
     await this.cacheManager.del(`video:${videoId}`);
     await this.cacheManager.del(`user_videos:${userId}`);
 
+    // Log video_hidden activity
+    this.activityLoggerService.logActivity({
+      userId: parseInt(userId),
+      actionType: 'video_hidden',
+      targetId: videoId,
+      targetType: 'video',
+      metadata: { isHidden: video.isHidden, title: video.title },
+    });
+
     return result;
   }
 
@@ -619,6 +639,15 @@ export class VideosService {
       await this.cacheManager.del('all_videos:100');
 
       console.log(`✅ Video ${videoId} completely deleted by user ${userId}`);
+
+      // Log video_deleted activity
+      this.activityLoggerService.logActivity({
+        userId: parseInt(userId),
+        actionType: 'video_deleted',
+        targetId: videoId,
+        targetType: 'video',
+        metadata: { title: video.title },
+      });
     } catch (error) {
       console.error(`❌ Error deleting video ${videoId}:`, error);
       throw error; // Throw original error with details

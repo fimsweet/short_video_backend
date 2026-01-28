@@ -333,6 +333,30 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    // Check if account is deactivated - prompt for reactivation
+    if (user.isDeactivated) {
+      // Calculate days remaining before auto-delete
+      let daysRemaining = 30;
+      if (user.deactivatedAt) {
+        const daysSinceDeactivation = Math.floor(
+          (Date.now() - new Date(user.deactivatedAt).getTime()) / (1000 * 60 * 60 * 24)
+        );
+        daysRemaining = Math.max(0, 30 - daysSinceDeactivation);
+        
+        // If 30 days passed, account should be deleted
+        if (daysRemaining <= 0) {
+          throw new UnauthorizedException('Tài khoản đã bị xóa vĩnh viễn do không được kích hoạt lại trong 30 ngày');
+        }
+      }
+      
+      return {
+        requiresReactivation: true,
+        userId: user.id,
+        daysRemaining,
+        message: 'Tài khoản đang bị vô hiệu hóa. Bạn có muốn kích hoạt lại?',
+      };
+    }
+
     // Check if 2FA is enabled
     if (user.twoFactorEnabled && user.twoFactorMethods && user.twoFactorMethods.length > 0) {
       // Return 2FA required response
@@ -508,6 +532,48 @@ export class AuthService {
       available,
       phone,
       message: available ? null : 'Số điện thoại này đã được sử dụng bởi tài khoản khác',
+    };
+  }
+
+  // Unlink phone from account
+  async unlinkPhone(userId: number, password: string) {
+    const user = await this.usersService.findById(userId);
+    if (!user) {
+      throw new BadRequestException('Không tìm thấy tài khoản');
+    }
+
+    // Check if user has a phone number
+    if (!user.phoneNumber) {
+      throw new BadRequestException('Tài khoản chưa liên kết số điện thoại');
+    }
+
+    // Verify password if user has one
+    if (user.password) {
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        throw new UnauthorizedException('Mật khẩu không đúng');
+      }
+    }
+
+    // Check if user has another login method (email with password or OAuth)
+    const hasEmail = user.email && !user.email.endsWith('@phone.user');
+    const hasPassword = !!user.password;
+    const hasOAuth = user.authProvider !== 'email' && user.authProvider !== 'phone';
+
+    if (!hasEmail && !hasOAuth) {
+      throw new BadRequestException('Bạn cần liên kết email trước khi hủy liên kết số điện thoại');
+    }
+
+    // Unlink phone
+    const result = await this.usersService.unlinkPhone(userId);
+    if (!result.success) {
+      throw new BadRequestException(result.message);
+    }
+
+    console.log(`📱 Phone unlinked from user ${userId}`);
+    return {
+      success: true,
+      message: 'Đã hủy liên kết số điện thoại thành công',
     };
   }
 

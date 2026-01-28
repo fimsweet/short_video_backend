@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { Follow } from '../entities/follow.entity';
+import { ActivityHistoryService } from '../activity-history/activity-history.service';
 
 @Injectable()
 export class FollowsService {
@@ -13,7 +14,8 @@ export class FollowsService {
     private followRepository: Repository<Follow>,
     private configService: ConfigService,
     private httpService: HttpService,
-  ) {}
+    private activityHistoryService: ActivityHistoryService,
+  ) { }
 
   async toggleFollow(followerId: number, followingId: number): Promise<{ following: boolean }> {
     if (followerId === followingId) {
@@ -26,10 +28,35 @@ export class FollowsService {
 
     if (existingFollow) {
       await this.followRepository.remove(existingFollow);
+
+      // Log unfollow activity
+      try {
+        await this.activityHistoryService.logActivity({
+          userId: followerId,
+          actionType: 'unfollow',
+          targetId: followingId.toString(),
+          targetType: 'user',
+        });
+      } catch (e) {
+        console.error('Error logging unfollow activity:', e);
+      }
+
       return { following: false };
     } else {
       const newFollow = this.followRepository.create({ followerId, followingId });
       await this.followRepository.save(newFollow);
+
+      // Log follow activity
+      try {
+        await this.activityHistoryService.logActivity({
+          userId: followerId,
+          actionType: 'follow',
+          targetId: followingId.toString(),
+          targetType: 'user',
+        });
+      } catch (e) {
+        console.error('Error logging follow activity:', e);
+      }
 
       // Send notification to video-service
       try {

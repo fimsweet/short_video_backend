@@ -419,8 +419,23 @@ export class UsersService {
 
   // Check if user has password (for OAuth users)
   async hasPassword(userId: number): Promise<boolean> {
-    const user = await this.userRepository.findOne({ where: { id: userId } });
-    return user?.password != null;
+    try {
+      console.log(`🔐 hasPassword service called for userId: ${userId}`);
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      
+      if (!user) {
+        console.log(`🔐 User not found for userId: ${userId}`);
+        return false;
+      }
+      
+      // Check for both null and empty string
+      const result = user.password != null && user.password.trim() !== '';
+      console.log(`🔐 User ${userId} password check: ${result ? 'HAS password' : 'NO password'}`);
+      return result;
+    } catch (error) {
+      console.error(`❌ Error in hasPassword for userId ${userId}:`, error);
+      throw error;
+    }
   }
 
   // Set password for OAuth users (who don't have password yet)
@@ -431,8 +446,8 @@ export class UsersService {
         return { success: false, message: 'Không tìm thấy người dùng' };
       }
 
-      // Check if user already has a password
-      if (user.password) {
+      // Check if user already has a password (not null and not empty)
+      if (user.password && user.password.trim() !== '') {
         return { success: false, message: 'Tài khoản đã có mật khẩu. Vui lòng sử dụng chức năng đổi mật khẩu.' };
       }
 
@@ -792,6 +807,38 @@ export class UsersService {
     }
   }
 
+  // Unlink phone from existing account
+  async unlinkPhone(userId: number): Promise<{ success: boolean; message: string }> {
+    try {
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) {
+        return { success: false, message: 'Không tìm thấy người dùng' };
+      }
+
+      if (!user.phoneNumber) {
+        return { success: false, message: 'Tài khoản chưa liên kết số điện thoại' };
+      }
+
+      // Remove phone
+      user.phoneNumber = null;
+      // Also clear Firebase providerId if auth was phone-based
+      if (user.authProvider === 'phone') {
+        user.providerId = null;
+      }
+      await this.userRepository.save(user);
+
+      // Invalidate cache
+      await this.cacheManager.del(`user:id:${userId}`);
+      await this.cacheManager.del(`user:username:${user.username}`);
+
+      console.log(`✅ Phone unlinked for user ${userId}`);
+      return { success: true, message: 'Đã hủy liên kết số điện thoại' };
+    } catch (error) {
+      console.error('❌ Error unlinking phone:', error);
+      return { success: false, message: 'Lỗi khi hủy liên kết số điện thoại' };
+    }
+  }
+
   // Link Google account to existing user (TikTok-style: allows login via Google after linking email)
   async linkGoogleToExistingAccount(userId: number, googleProviderId: string): Promise<void> {
     try {
@@ -968,6 +1015,148 @@ export class UsersService {
     } catch (error) {
       console.error(`❌ Error getting online status for user ${userId}:`, error);
       return { isOnline: false, lastSeen: null, statusText: 'Offline' };
+    }
+  }
+
+  // ============= ACCOUNT DEACTIVATION =============
+
+  async deactivateAccount(userId: number, password: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      
+      if (!user) {
+        return { success: false, message: 'User not found' };
+      }
+
+      // Verify password
+      if (user.password) {
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
+          return { success: false, message: 'Incorrect password' };
+        }
+      } else if (user.authProvider !== 'email') {
+        // For OAuth users, we might want different verification
+        // For now, allow deactivation without password for OAuth users
+        // In production, you might want to verify via OAuth provider
+      }
+
+      // Deactivate the account
+      user.isDeactivated = true;
+      user.deactivatedAt = new Date();
+      await this.userRepository.save(user);
+
+      // Clear any cached data for this user
+      await this.cacheManager.del(`user:${userId}`);
+      await this.cacheManager.del(`user:settings:${userId}`);
+
+      console.log(`✅ Account deactivated for user ${userId}`);
+      
+      return { 
+        success: true, 
+        message: 'Account has been deactivated. You can reactivate by logging in within 30 days.' 
+      };
+    } catch (error) {
+      console.error(`❌ Error deactivating account for user ${userId}:`, error);
+      return { success: false, message: 'Failed to deactivate account' };
+    }
+  }
+
+  async reactivateAccount(body: { email?: string; username?: string; password: string }): Promise<{ success: boolean; message: string; user?: any }> {
+    try {
+      const { email, username, password } = body;
+      
+      // Find user by email or username
+      let user: User | null = null;
+      if (email) {
+        user = await this.userRepository.findOne({ where: { email } });
+      } else if (username) {
+        user = await this.userRepository.findOne({ where: { username } });
+      }
+
+      if (!user) {
+        return { success: false, message: 'User not found' };
+      }
+
+      // Check if account is actually deactivated
+      if (!user.isDeactivated) {
+        return { success: false, message: 'Account is not deactivated' };
+      }
+
+      // Check if within 30 days grace period
+      if (user.deactivatedAt) {
+        const daysSinceDeactivation = Math.floor(
+          (Date.now() - new Date(user.deactivatedAt).getTime()) / (1000 * 60 * 60 * 24)
+        );
+        if (daysSinceDeactivation > 30) {
+          return { success: false, message: 'Account reactivation period has expired' };
+        }
+      }
+
+      // Verify password
+      if (user.password) {
+        const isPasswordValid = await bcrypt.compare(password, user.password);
+        if (!isPasswordValid) {
+          return { success: false, message: 'Incorrect password' };
+        }
+      }
+
+      // Reactivate the account
+      user.isDeactivated = false;
+      user.deactivatedAt = null;
+      await this.userRepository.save(user);
+
+      console.log(`✅ Account reactivated for user ${user.id}`);
+
+      // Return user data for login
+      const { password: _, ...userWithoutPassword } = user;
+      
+      return { 
+        success: true, 
+        message: 'Account has been reactivated',
+        user: userWithoutPassword,
+      };
+    } catch (error) {
+      console.error('❌ Error reactivating account:', error);
+      return { success: false, message: 'Failed to reactivate account' };
+    }
+  }
+
+  async checkDeactivatedStatus(identifier: string): Promise<{ isDeactivated: boolean; deactivatedAt?: Date; daysRemaining?: number }> {
+    try {
+      // Try to find by email or username
+      const user = await this.userRepository.findOne({
+        where: [
+          { email: identifier },
+          { username: identifier },
+        ],
+        select: ['id', 'isDeactivated', 'deactivatedAt'],
+      });
+
+      if (!user) {
+        return { isDeactivated: false };
+      }
+
+      if (!user.isDeactivated) {
+        return { isDeactivated: false };
+      }
+
+      // Calculate days remaining for reactivation
+      let daysRemaining = 30;
+      if (user.deactivatedAt) {
+        const daysSinceDeactivation = Math.floor(
+          (Date.now() - new Date(user.deactivatedAt).getTime()) / (1000 * 60 * 60 * 24)
+        );
+        daysRemaining = Math.max(0, 30 - daysSinceDeactivation);
+      }
+
+      return {
+        isDeactivated: true,
+        deactivatedAt: user.deactivatedAt ?? undefined,
+        daysRemaining,
+      };
+    } catch (error) {
+      console.error('❌ Error checking deactivated status:', error);
+      return { isDeactivated: false };
     }
   }
 }

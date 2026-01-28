@@ -54,6 +54,13 @@ export class User {
   @Column({ type: 'datetime', nullable: true })
   lastSeen: Date | null;
 
+  // Account Deactivation
+  @Column({ default: false })
+  isDeactivated: boolean;
+
+  @Column({ type: 'datetime', nullable: true })
+  deactivatedAt: Date | null;
+
   @CreateDateColumn()
   createdAt: Date;
 
