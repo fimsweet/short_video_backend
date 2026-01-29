@@ -43,12 +43,42 @@ export class SessionsService {
 
   /**
    * Create a new session when user logs in
+   * Reuses existing session for same platform if exists
    * Also sends login alert to other devices if enabled
    */
   async createSession(dto: CreateSessionDto): Promise<UserSession> {
     // Hash token for security (store only first/last 10 chars for identification)
     const tokenHash = this.hashToken(dto.token);
 
+    // Check if there's an existing active session for the same platform
+    const existingSession = await this.sessionRepository.findOne({
+      where: {
+        userId: dto.userId,
+        platform: dto.platform || 'unknown',
+        isActive: true,
+      },
+      order: { lastActivityAt: 'DESC' },
+    });
+
+    // If existing session found, update it instead of creating new one
+    if (existingSession) {
+      existingSession.token = tokenHash;
+      existingSession.fcmToken = dto.fcmToken || existingSession.fcmToken;
+      existingSession.deviceName = dto.deviceName || existingSession.deviceName;
+      existingSession.deviceModel = dto.deviceModel || existingSession.deviceModel;
+      existingSession.osVersion = dto.osVersion || existingSession.osVersion;
+      existingSession.appVersion = dto.appVersion || existingSession.appVersion;
+      existingSession.lastActivityAt = new Date();
+      
+      const updatedSession = await this.sessionRepository.save(existingSession);
+      
+      // Clear cache
+      await this.cacheManager.del(`user_sessions:${dto.userId}`);
+      
+      return updatedSession;
+    }
+
+    // Create new session only if no existing session for this platform
     const session = this.sessionRepository.create({
       userId: dto.userId,
       token: tokenHash,

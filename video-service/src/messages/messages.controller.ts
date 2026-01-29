@@ -79,10 +79,65 @@ export class MessagesController {
   async updateConversationSettings(
     @Param('recipientId') recipientId: string,
     @Query('userId') userId: string,
-    @Body() body: { isMuted?: boolean; isPinned?: boolean },
+    @Body() body: { isMuted?: boolean; isPinned?: boolean; themeColor?: string; nickname?: string },
   ) {
     await this.messagesService.updateConversationSettings(userId, recipientId, body);
     return { success: true };
+  }
+
+  // ========== PINNED MESSAGES ==========
+
+  @Post('pin/:messageId')
+  async pinMessage(
+    @Param('messageId') messageId: string,
+    @Query('userId') userId: string,
+  ) {
+    const message = await this.messagesService.pinMessage(messageId, userId);
+    return { success: true, data: message };
+  }
+
+  @Post('unpin/:messageId')
+  async unpinMessage(
+    @Param('messageId') messageId: string,
+    @Query('userId') userId: string,
+  ) {
+    const message = await this.messagesService.unpinMessage(messageId, userId);
+    return { success: true, data: message };
+  }
+
+  @Get('pinned/:userId1/:userId2')
+  async getPinnedMessages(
+    @Param('userId1') userId1: string,
+    @Param('userId2') userId2: string,
+  ) {
+    const messages = await this.messagesService.getPinnedMessages(userId1, userId2);
+    return { success: true, data: messages };
+  }
+
+  // ========== SEARCH MESSAGES ==========
+
+  @Get('search/:userId1/:userId2')
+  async searchMessages(
+    @Param('userId1') userId1: string,
+    @Param('userId2') userId2: string,
+    @Query('query') query: string,
+    @Query('limit') limit: string = '50',
+  ) {
+    const messages = await this.messagesService.searchMessages(userId1, userId2, query, parseInt(limit, 10));
+    return { success: true, data: messages };
+  }
+
+  // ========== MEDIA MESSAGES ==========
+
+  @Get('media/:userId1/:userId2')
+  async getMediaMessages(
+    @Param('userId1') userId1: string,
+    @Param('userId2') userId2: string,
+    @Query('limit') limit: string = '50',
+    @Query('offset') offset: string = '0',
+  ) {
+    const messages = await this.messagesService.getMediaMessages(userId1, userId2, parseInt(limit, 10), parseInt(offset, 10));
+    return { success: true, data: messages };
   }
 
   @Post('upload-image')

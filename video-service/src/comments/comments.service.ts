@@ -1,4 +1,4 @@
-import { Injectable, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Inject, forwardRef, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { Comment } from '../entities/comment.entity';
@@ -6,6 +6,7 @@ import { CommentLike } from '../entities/comment-like.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../entities/notification.entity';
 import { ActivityLoggerService } from '../config/activity-logger.service';
+import { PrivacyService } from '../config/privacy.service';
 
 @Injectable()
 export class CommentsService {
@@ -17,9 +18,32 @@ export class CommentsService {
     @Inject(forwardRef(() => NotificationsService))
     private notificationsService: NotificationsService,
     private activityLoggerService: ActivityLoggerService,
+    private privacyService: PrivacyService,
   ) { }
 
   async createComment(videoId: string, userId: string, content: string, parentId?: string, imageUrl?: string | null): Promise<Comment> {
+    // Get video to find owner for privacy check
+    const videos = await this.commentRepository.manager.query(
+      'SELECT id, userId FROM videos WHERE id = ?',
+      [videoId]
+    );
+    
+    if (videos && videos.length > 0) {
+      const videoOwnerId = videos[0].userId;
+      
+      // Check if user is allowed to comment
+      const canComment = await this.privacyService.canComment(userId, videoOwnerId);
+      if (!canComment.allowed) {
+        throw new ForbiddenException(canComment.reason || 'Bạn không được phép bình luận video này');
+      }
+
+      // Check if comment should be filtered for bad words
+      const shouldFilter = await this.privacyService.shouldFilterComment(videoOwnerId, content);
+      if (shouldFilter) {
+        throw new BadRequestException('Bình luận chứa nội dung không phù hợp');
+      }
+    }
+
     // If replying to a reply, find the root parent comment
     let rootParentId = parentId;
     if (parentId) {
@@ -40,14 +64,8 @@ export class CommentsService {
 
     const savedComment = await this.commentRepository.save(comment);
 
-    // Create notification for video owner
+    // Create notification for video owner (reuse videos from privacy check)
     try {
-      // Get video to find owner using raw query
-      const videos = await this.commentRepository.manager.query(
-        'SELECT id, userId FROM videos WHERE id = ?',
-        [videoId]
-      );
-
       if (videos && videos.length > 0) {
         const video = videos[0];
         if (video.userId !== userId) {
@@ -65,30 +83,63 @@ export class CommentsService {
       console.error('Error creating comment notification:', e);
     }
 
-    // Log comment activity
+    // Get video info for activity log
+    let videoInfo: { id: string; title: string; thumbnailUrl: string; userId: string } | null = null;
+    try {
+      const videoResults = await this.commentRepository.manager.query(
+        'SELECT id, title, thumbnailUrl, userId FROM videos WHERE id = ?',
+        [videoId]
+      );
+      if (videoResults && videoResults.length > 0) {
+        videoInfo = videoResults[0];
+      }
+    } catch (e) {
+      console.error('Error getting video info for activity log:', e);
+    }
+
+    // Log comment activity with video details
     this.activityLoggerService.logActivity({
       userId: parseInt(userId),
       actionType: 'comment',
       targetId: videoId,
       targetType: 'video',
-      metadata: { content: content.substring(0, 100), commentId: savedComment.id },
+      metadata: { 
+        content: content.substring(0, 100), 
+        commentId: savedComment.id,
+        videoTitle: videoInfo?.title,
+        videoThumbnail: videoInfo?.thumbnailUrl,
+        videoOwnerId: videoInfo?.userId,
+      },
     });
 
     return savedComment;
   }
 
-  async getCommentsByVideo(videoId: string): Promise<any[]> {
+  async getCommentsByVideo(videoId: string, limit?: number, offset?: number): Promise<{ comments: any[]; hasMore: boolean; total: number }> {
+    const take = limit || 20; // Default 20 comments per page
+    const skip = offset || 0;
+
+    // Get total count first
+    const total = await this.commentRepository.count({
+      where: { videoId, parentId: IsNull() },
+    });
+
     const comments = await this.commentRepository.find({
       where: { videoId, parentId: IsNull() }, // FIXED: Use IsNull()
       order: {
         isPinned: 'DESC', // Pinned comments first
         createdAt: 'DESC'
       },
+      take: take + 1, // Get one extra to check if there's more
+      skip,
     });
+
+    const hasMore = comments.length > take;
+    const commentsToReturn = hasMore ? comments.slice(0, take) : comments;
 
     // Get likes count and replies for each comment, sort by likes
     const commentsWithData = await Promise.all(
-      comments.map(async (comment) => {
+      commentsToReturn.map(async (comment) => {
         const likeCount = await this.getCommentLikeCount(comment.id);
         const replyCount = await this.getReplyCount(comment.id);
         return {
@@ -100,7 +151,7 @@ export class CommentsService {
     );
 
     // Sort by: 1) Pinned, 2) Like count, 3) Created date
-    return commentsWithData.sort((a, b) => {
+    const sortedComments = commentsWithData.sort((a, b) => {
       if (a.isPinned !== b.isPinned) {
         return b.isPinned ? 1 : -1; // Pinned first
       }
@@ -109,6 +160,12 @@ export class CommentsService {
       }
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
+
+    return {
+      comments: sortedComments,
+      hasMore,
+      total,
+    };
   }
 
   async getReplies(commentId: string): Promise<any[]> {

@@ -7,6 +7,8 @@ import { CommentsService } from '../comments/comments.service';
 import { SavedVideosService } from '../saved-videos/saved-videos.service';
 import { SharesService } from '../shares/shares.service';
 import { ActivityLoggerService } from '../config/activity-logger.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../entities/notification.entity';
 
 @Injectable()
 export class LikesService {
@@ -22,10 +24,15 @@ export class LikesService {
     @Inject(forwardRef(() => SharesService))
     private sharesService: SharesService,
     private activityLoggerService: ActivityLoggerService,
+    @Inject(forwardRef(() => NotificationsService))
+    private notificationsService: NotificationsService,
   ) { }
 
   async toggleLike(videoId: string, userId: string): Promise<{ liked: boolean; likeCount: number }> {
     console.log(`🔄 Toggle like: videoId=${videoId}, userId=${userId}`);
+
+    // Get video info for activity log
+    const video = await this.videoRepository.findOne({ where: { id: videoId } });
 
     const existingLike = await this.likeRepository.findOne({
       where: { videoId, userId },
@@ -35,12 +42,17 @@ export class LikesService {
       console.log('❌ Unlike - removing existing like');
       await this.likeRepository.remove(existingLike);
 
-      // Log unlike activity
+      // Log unlike activity with video details
       this.activityLoggerService.logActivity({
         userId: parseInt(userId),
         actionType: 'unlike',
         targetId: videoId,
         targetType: 'video',
+        metadata: video ? {
+          videoTitle: video.title,
+          videoThumbnail: video.thumbnailUrl,
+          videoOwnerId: video.userId,
+        } : {},
       });
 
       const likeCount = await this.getLikeCount(videoId);
@@ -52,13 +64,35 @@ export class LikesService {
         userId,
       });
 
-      // Log like activity
+      // Log like activity with video details
       this.activityLoggerService.logActivity({
         userId: parseInt(userId),
         actionType: 'like',
         targetId: videoId,
         targetType: 'video',
+        metadata: video ? {
+          videoTitle: video.title,
+          videoThumbnail: video.thumbnailUrl,
+          videoOwnerId: video.userId,
+        } : {},
       });
+
+      // Send notification to video owner (if not liking own video)
+      if (video && video.userId !== userId) {
+        try {
+          await this.notificationsService.createNotification(
+            video.userId,
+            userId,
+            NotificationType.LIKE,
+            videoId,
+            undefined,
+            video.title ? `Đã thích video: ${video.title}` : 'Đã thích video của bạn',
+          );
+          console.log(`✅ Like notification sent to user ${video.userId}`);
+        } catch (e) {
+          console.error('Error creating like notification:', e);
+        }
+      }
 
       const likeCount = await this.getLikeCount(videoId);
       return { liked: true, likeCount };

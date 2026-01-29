@@ -103,12 +103,12 @@ export class UsersController {
     try {
       const userId = req.user.userId;
       console.log(`🔐 Checking hasPassword for userId: ${userId}`);
-      
+
       if (!userId) {
         console.error('❌ userId is undefined in request');
         return { success: false, hasPassword: false, error: 'Invalid user' };
       }
-      
+
       const hasPassword = await this.usersService.hasPassword(userId);
       console.log(`🔐 hasPassword result for userId ${userId}: ${hasPassword}`);
       return { success: true, hasPassword };
@@ -116,6 +116,19 @@ export class UsersController {
       console.error('❌ Error in hasPassword endpoint:', error);
       return { success: false, hasPassword: false, error: error.message };
     }
+  }
+
+  // Get username change info (cooldown status)
+  // IMPORTANT: This route MUST be before :username to avoid being matched as a username
+  @Get('username-change-info')
+  @UseGuards(JwtAuthGuard)
+  async getUsernameChangeInfo(@Request() req) {
+    const userId = req.user.userId;
+    const info = await this.usersService.getUsernameChangeInfo(userId);
+    return {
+      success: true,
+      ...info,
+    };
   }
 
   @Get(':username')
@@ -165,6 +178,18 @@ export class UsersController {
       message: 'Profile updated successfully',
       user: updatedUser,
     };
+  }
+
+  // Change username (with validation and 30-day cooldown like TikTok)
+  @Put('change-username')
+  @UseGuards(JwtAuthGuard)
+  async changeUsername(
+    @Request() req,
+    @Body() body: { newUsername: string },
+  ) {
+    const userId = req.user.userId;
+    const result = await this.usersService.changeUsername(userId, body.newUsername);
+    return result;
   }
 
   // Change password
@@ -307,5 +332,34 @@ export class UsersController {
   async checkDeactivated(@Param('identifier') identifier: string) {
     const status = await this.usersService.checkDeactivatedStatus(identifier);
     return status;
+  }
+
+  // ============= PRIVACY SETTINGS (INTERNAL API for video-service) =============
+  
+  // Get user privacy settings (called by video-service)
+  @Get('privacy/:userId')
+  async getPrivacySettings(@Param('userId') userId: string) {
+    const settings = await this.usersService.getPrivacySettings(parseInt(userId, 10));
+    return {
+      success: true,
+      settings,
+    };
+  }
+
+  // Check if requester can perform action on target user
+  @Post('privacy/check')
+  async checkPrivacyPermission(
+    @Body() body: { 
+      requesterId: string; 
+      targetUserId: string; 
+      action: 'view_video' | 'send_message' | 'comment' 
+    },
+  ) {
+    const result = await this.usersService.checkPrivacyPermission(
+      parseInt(body.requesterId, 10),
+      parseInt(body.targetUserId, 10),
+      body.action,
+    );
+    return result;
   }
 }

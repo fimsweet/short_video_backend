@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { RedisCacheModule } from './config/redis-cache.module';
 import { StorageModule } from './config/storage.module';
 import { ActivityLoggerModule } from './config/activity-logger.module';
+import { PrivacyModule } from './config/privacy.module';
 import { HealthModule } from './health/health.module';
 import { VideosModule } from './videos/videos.module';
 import { LikesModule } from './likes/likes.module';
@@ -33,6 +34,7 @@ import { getDatabaseConfig } from './config/database.config';
     RedisCacheModule, // Redis cache global
     StorageModule, // AWS S3 storage (global)
     ActivityLoggerModule, // ✅ Activity logging (global)
+    PrivacyModule, // ✅ Privacy settings check (global)
     HealthModule, // Health check endpoints
     VideosModule,
     LikesModule,

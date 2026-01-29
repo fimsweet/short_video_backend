@@ -146,8 +146,8 @@ export class VideoProcessorService implements OnModuleInit {
         hlsUrl = uploadResult.hlsUrl;
         thumbnailUrl = uploadResult.thumbnailUrl;
 
-        // Clean up local files after S3 upload
-        console.log(`🧹 Cleaning up local files...`);
+        // Clean up local processed files after S3 upload
+        console.log(`🧹 Cleaning up local processed files...`);
         fs.rmSync(outputDir, { recursive: true, force: true });
       } else {
         // Use local paths
@@ -155,7 +155,20 @@ export class VideoProcessorService implements OnModuleInit {
         thumbnailUrl = `/uploads/processed_videos/${outputFileName}/thumbnail.jpg`;
       }
 
-      // 7. Cập nhật database với aspect ratio và thumbnail
+      // 7. Delete raw video file to save storage (best practice for video platforms)
+      // Raw videos are no longer needed after HLS conversion is complete
+      console.log(`🗑️ Deleting raw video file to save storage...`);
+      try {
+        if (fs.existsSync(inputPath)) {
+          fs.unlinkSync(inputPath);
+          console.log(`✅ Raw video deleted: ${inputPath}`);
+        }
+      } catch (deleteError) {
+        // Log but don't fail - raw video deletion is not critical
+        console.warn(`⚠️ Could not delete raw video: ${deleteError.message}`);
+      }
+
+      // 8. Cập nhật database với aspect ratio và thumbnail
       await this.videoRepository.update(videoId, {
         status: VideoStatus.READY,
         hlsUrl: hlsUrl,
@@ -163,7 +176,7 @@ export class VideoProcessorService implements OnModuleInit {
         aspectRatio: originalAspectRatio,
       });
 
-      // 8. Notify video-service to invalidate cache
+      // 9. Notify video-service to invalidate cache
       await this.notifyProcessingComplete(videoId, video.userId);
 
       console.log(`\n${'='.repeat(60)}`);

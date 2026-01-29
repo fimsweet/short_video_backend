@@ -33,10 +33,10 @@ export class PushController {
         where: { userId: parseInt(dto.userId) },
       });
 
-      // Default to enabled if no settings found
-      const notificationsEnabled = settings?.loginAlertsEnabled ?? true;
+      // Default to enabled if no settings found - check pushNotifications setting
+      const pushNotificationsEnabled = settings?.pushNotifications ?? true;
       
-      if (!notificationsEnabled) {
+      if (!pushNotificationsEnabled) {
         return {
           success: false,
           message: 'User has disabled push notifications',

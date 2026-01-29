@@ -5,6 +5,7 @@ import { CreateUserDto } from '../auth/dto/create-user.dto';
 import { User, AuthProvider } from '../entities/user.entity';
 import { BlockedUser } from '../entities/blocked-user.entity';
 import { UserSettings } from '../entities/user-settings.entity';
+import { Follow } from '../entities/follow.entity';
 import { UpdateUserSettingsDto } from './dto/update-user-settings.dto';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
@@ -20,6 +21,8 @@ export class UsersService {
     private blockedUserRepository: Repository<BlockedUser>,
     @InjectRepository(UserSettings)
     private userSettingsRepository: Repository<UserSettings>,
+    @InjectRepository(Follow)
+    private followRepository: Repository<Follow>,
     @Inject(CACHE_MANAGER)
     private cacheManager: Cache,
     private emailService: EmailService,
@@ -378,6 +381,134 @@ export class UsersService {
     }
   }
 
+  // Get username change info (when user can change username next)
+  async getUsernameChangeInfo(userId: number): Promise<{
+    canChange: boolean;
+    lastChangedAt: Date | null;
+    nextChangeDate: Date | null;
+    daysUntilChange: number;
+  }> {
+    try {
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
+
+      const COOLDOWN_DAYS = 30; // TikTok-style: can only change username every 30 days
+      const lastChangedAt = user.usernameLastChangedAt;
+
+      if (!lastChangedAt) {
+        // Never changed username, can change now
+        return {
+          canChange: true,
+          lastChangedAt: null,
+          nextChangeDate: null,
+          daysUntilChange: 0,
+        };
+      }
+
+      const now = new Date();
+      const nextChangeDate = new Date(lastChangedAt);
+      nextChangeDate.setDate(nextChangeDate.getDate() + COOLDOWN_DAYS);
+
+      const canChange = now >= nextChangeDate;
+      const daysUntilChange = canChange ? 0 : Math.ceil((nextChangeDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+
+      return {
+        canChange,
+        lastChangedAt,
+        nextChangeDate,
+        daysUntilChange,
+      };
+    } catch (error) {
+      console.error('❌ Error getting username change info:', error);
+      throw error;
+    }
+  }
+
+  // Change username (with validation and cooldown)
+  async changeUsername(userId: number, newUsername: string): Promise<{
+    success: boolean;
+    message: string;
+    user?: any;
+  }> {
+    try {
+      // Validate username format
+      const usernameRegex = /^[a-zA-Z0-9_]{3,24}$/;
+      if (!usernameRegex.test(newUsername)) {
+        return {
+          success: false,
+          message: 'Username must be 3-24 characters and contain only letters, numbers, and underscores',
+        };
+      }
+
+      // Check if username contains only numbers
+      if (/^\d+$/.test(newUsername)) {
+        return {
+          success: false,
+          message: 'Username cannot contain only numbers',
+        };
+      }
+
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) {
+        return { success: false, message: 'User not found' };
+      }
+
+      const oldUsername = user.username;
+
+      // Check if username is the same
+      if (oldUsername.toLowerCase() === newUsername.toLowerCase()) {
+        return { success: false, message: 'New username must be different from current username' };
+      }
+
+      // Check cooldown
+      const changeInfo = await this.getUsernameChangeInfo(userId);
+      if (!changeInfo.canChange) {
+        return {
+          success: false,
+          message: `You can change your username again in ${changeInfo.daysUntilChange} days`,
+        };
+      }
+
+      // Check if new username is available
+      const existingUser = await this.userRepository.findOne({
+        where: { username: newUsername.toLowerCase() }
+      });
+      if (existingUser) {
+        return { success: false, message: 'This username is already taken' };
+      }
+
+      // Update username
+      user.username = newUsername.toLowerCase();
+      user.usernameLastChangedAt = new Date();
+
+      const updatedUser = await this.userRepository.save(user);
+
+      // Invalidate cache for both old and new username
+      await this.cacheManager.del(`user:id:${userId}`);
+      await this.cacheManager.del(`user:username:${oldUsername}`);
+      await this.cacheManager.del(`user:username:${newUsername.toLowerCase()}`);
+
+      console.log(`✅ Username changed for user ${userId}: ${oldUsername} -> ${newUsername}`);
+
+      return {
+        success: true,
+        message: 'Username changed successfully',
+        user: {
+          id: updatedUser.id,
+          username: updatedUser.username,
+          email: updatedUser.email,
+          avatar: updatedUser.avatar,
+          usernameLastChangedAt: updatedUser.usernameLastChangedAt,
+        },
+      };
+    } catch (error) {
+      console.error('❌ Error changing username:', error);
+      return { success: false, message: 'Error changing username' };
+    }
+  }
+
   // Change password
   async changePassword(userId: number, currentPassword: string, newPassword: string): Promise<{ success: boolean; message: string }> {
     try {
@@ -422,12 +553,12 @@ export class UsersService {
     try {
       console.log(`🔐 hasPassword service called for userId: ${userId}`);
       const user = await this.userRepository.findOne({ where: { id: userId } });
-      
+
       if (!user) {
         console.log(`🔐 User not found for userId: ${userId}`);
         return false;
       }
-      
+
       // Check for both null and empty string
       const result = user.password != null && user.password.trim() !== '';
       console.log(`🔐 User ${userId} password check: ${result ? 'HAS password' : 'NO password'}`);
@@ -694,6 +825,8 @@ export class UsersService {
     userId: number,
     updateData: UpdateUserSettingsDto,
   ): Promise<UserSettings> {
+    console.log(`📝 updateUserSettings called for userId ${userId} with data:`, JSON.stringify(updateData));
+    
     let settings = await this.userSettingsRepository.findOne({
       where: { userId },
     });
@@ -715,16 +848,31 @@ export class UsersService {
       });
       console.log(`🆕 Creating new settings for user ${userId}`);
     } else {
-      // Update existing settings
-      Object.assign(settings, updateData);
-      console.log(`📝 Updating existing settings for user ${userId}`);
+      console.log(`📊 Existing settings for user ${userId}:`, JSON.stringify(settings));
+      // Update existing settings - only update fields that are provided
+      if (updateData.theme !== undefined) settings.theme = updateData.theme;
+      if (updateData.notificationsEnabled !== undefined) settings.notificationsEnabled = updateData.notificationsEnabled;
+      if (updateData.pushNotifications !== undefined) settings.pushNotifications = updateData.pushNotifications;
+      if (updateData.emailNotifications !== undefined) settings.emailNotifications = updateData.emailNotifications;
+      if (updateData.loginAlertsEnabled !== undefined) settings.loginAlertsEnabled = updateData.loginAlertsEnabled;
+      if (updateData.accountPrivacy !== undefined) settings.accountPrivacy = updateData.accountPrivacy;
+      if (updateData.showOnlineStatus !== undefined) settings.showOnlineStatus = updateData.showOnlineStatus;
+      if (updateData.autoplayVideos !== undefined) settings.autoplayVideos = updateData.autoplayVideos;
+      if (updateData.videoQuality !== undefined) settings.videoQuality = updateData.videoQuality;
+      if (updateData.language !== undefined) settings.language = updateData.language;
+      if (updateData.timezone !== undefined) settings.timezone = updateData.timezone;
+      if (updateData.whoCanViewVideos !== undefined) settings.whoCanViewVideos = updateData.whoCanViewVideos;
+      if (updateData.whoCanSendMessages !== undefined) settings.whoCanSendMessages = updateData.whoCanSendMessages;
+      if (updateData.whoCanComment !== undefined) settings.whoCanComment = updateData.whoCanComment;
+      if (updateData.filterComments !== undefined) settings.filterComments = updateData.filterComments;
+      console.log(`📝 Updated settings for user ${userId}:`, JSON.stringify(settings));
     }
 
     const updatedSettings = await this.userSettingsRepository.save(settings);
 
     // Invalidate cache
     await this.cacheManager.del(`user:settings:${userId}`);
-    console.log(`✅ Settings updated for user ${userId}`, updateData);
+    console.log(`✅ Settings saved and cache invalidated for user ${userId}`);
 
     return updatedSettings;
   }
@@ -748,15 +896,15 @@ export class UsersService {
       // Check if user already has a real email (not placeholder)
       const isPlaceholderEmail = user.email?.endsWith('@phone.user');
       const hasRealEmail = user.email && !isPlaceholderEmail;
-      
+
       // Update email
       user.email = email;
-      
+
       // If password provided, set it so user can login with email+password
       if (hashedPassword) {
         user.password = hashedPassword;
       }
-      
+
       await this.userRepository.save(user);
 
       // Invalidate cache
@@ -764,9 +912,9 @@ export class UsersService {
       await this.cacheManager.del(`user:username:${user.username}`);
 
       console.log(`✅ Email linked for user ${userId}: ${email}${hashedPassword ? ' (with password)' : ''}`);
-      return { 
-        success: true, 
-        message: hasRealEmail ? 'Email đã được cập nhật' : 'Email đã được thêm vào tài khoản' 
+      return {
+        success: true,
+        message: hasRealEmail ? 'Email đã được cập nhật' : 'Email đã được thêm vào tài khoản'
       };
     } catch (error) {
       console.error('❌ Error linking email:', error);
@@ -851,11 +999,11 @@ export class UsersService {
       // We use a separate field or update providerId based on authProvider
       // For now, we'll just log it - the email match is enough for authentication
       console.log(`🔗 Google account linked for user ${userId}, providerId: ${googleProviderId}`);
-      
+
       // Optional: Store googleProviderId for faster lookup next time
       // You could add a googleProviderId column to the user entity
       // For now, we rely on email matching
-      
+
       // Invalidate cache
       await this.cacheManager.del(`user:id:${userId}`);
       await this.cacheManager.del(`user:username:${user.username}`);
@@ -976,7 +1124,7 @@ export class UsersService {
   // Get user's online status
   async getOnlineStatus(userId: number): Promise<{ isOnline: boolean; lastSeen: Date | null; statusText: string }> {
     try {
-      const user = await this.userRepository.findOne({ 
+      const user = await this.userRepository.findOne({
         where: { id: userId },
         select: ['id', 'lastSeen'],
       });
@@ -1023,7 +1171,7 @@ export class UsersService {
   async deactivateAccount(userId: number, password: string): Promise<{ success: boolean; message: string }> {
     try {
       const user = await this.userRepository.findOne({ where: { id: userId } });
-      
+
       if (!user) {
         return { success: false, message: 'User not found' };
       }
@@ -1050,10 +1198,10 @@ export class UsersService {
       await this.cacheManager.del(`user:settings:${userId}`);
 
       console.log(`✅ Account deactivated for user ${userId}`);
-      
-      return { 
-        success: true, 
-        message: 'Account has been deactivated. You can reactivate by logging in within 30 days.' 
+
+      return {
+        success: true,
+        message: 'Account has been deactivated. You can reactivate by logging in within 30 days.'
       };
     } catch (error) {
       console.error(`❌ Error deactivating account for user ${userId}:`, error);
@@ -1064,7 +1212,7 @@ export class UsersService {
   async reactivateAccount(body: { email?: string; username?: string; password: string }): Promise<{ success: boolean; message: string; user?: any }> {
     try {
       const { email, username, password } = body;
-      
+
       // Find user by email or username
       let user: User | null = null;
       if (email) {
@@ -1109,9 +1257,9 @@ export class UsersService {
 
       // Return user data for login
       const { password: _, ...userWithoutPassword } = user;
-      
-      return { 
-        success: true, 
+
+      return {
+        success: true,
         message: 'Account has been reactivated',
         user: userWithoutPassword,
       };
@@ -1157,6 +1305,101 @@ export class UsersService {
     } catch (error) {
       console.error('❌ Error checking deactivated status:', error);
       return { isDeactivated: false };
+    }
+  }
+
+  // ============= PRIVACY SETTINGS =============
+
+  // Get privacy settings for a user (called by video-service)
+  async getPrivacySettings(userId: number): Promise<{
+    accountPrivacy: string;
+    whoCanViewVideos: string;
+    whoCanSendMessages: string;
+    whoCanComment: string;
+    filterComments: boolean;
+  }> {
+    const settings = await this.userSettingsRepository.findOne({
+      where: { userId },
+      select: ['accountPrivacy', 'whoCanViewVideos', 'whoCanSendMessages', 'whoCanComment', 'filterComments'],
+    });
+
+    return {
+      accountPrivacy: settings?.accountPrivacy ?? 'public',
+      whoCanViewVideos: settings?.whoCanViewVideos ?? 'everyone',
+      whoCanSendMessages: settings?.whoCanSendMessages ?? 'everyone',
+      whoCanComment: settings?.whoCanComment ?? 'everyone',
+      filterComments: settings?.filterComments ?? true,
+    };
+  }
+
+  // Check if requester has permission to perform action on target user
+  async checkPrivacyPermission(
+    requesterId: number,
+    targetUserId: number,
+    action: 'view_video' | 'send_message' | 'comment',
+  ): Promise<{ allowed: boolean; reason?: string }> {
+    // Owner always has permission
+    if (requesterId === targetUserId) {
+      return { allowed: true };
+    }
+
+    const settings = await this.getPrivacySettings(targetUserId);
+    
+    // Check if they are friends (mutual follow)
+    const isFriend = await this.followRepository.findOne({
+      where: [
+        { followerId: requesterId, followingId: targetUserId },
+      ],
+    }).then(async (follow1) => {
+      if (!follow1) return false;
+      const follow2 = await this.followRepository.findOne({
+        where: { followerId: targetUserId, followingId: requesterId },
+      });
+      return !!follow2;
+    });
+
+    let settingValue: string;
+    switch (action) {
+      case 'view_video':
+        settingValue = settings.whoCanViewVideos;
+        break;
+      case 'send_message':
+        settingValue = settings.whoCanSendMessages;
+        break;
+      case 'comment':
+        settingValue = settings.whoCanComment;
+        break;
+      default:
+        return { allowed: true };
+    }
+
+    switch (settingValue) {
+      case 'everyone':
+        return { allowed: true };
+      case 'friends':
+        if (isFriend) {
+          return { allowed: true };
+        }
+        return { 
+          allowed: false, 
+          reason: action === 'view_video' 
+            ? 'Chỉ bạn bè mới có thể xem video này'
+            : action === 'send_message'
+            ? 'Chỉ bạn bè mới có thể gửi tin nhắn'
+            : 'Chỉ bạn bè mới có thể bình luận',
+        };
+      case 'noOne':
+      case 'onlyMe':
+        return { 
+          allowed: false, 
+          reason: action === 'view_video' 
+            ? 'Video này ở chế độ riêng tư'
+            : action === 'send_message'
+            ? 'Người dùng đã tắt nhận tin nhắn'
+            : 'Người dùng đã tắt bình luận',
+        };
+      default:
+        return { allowed: true };
     }
   }
 }

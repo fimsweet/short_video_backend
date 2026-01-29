@@ -107,11 +107,12 @@ export class RecommendationService {
       // 5. Get videos user has already watched (to filter or deprioritize)
       const watchedVideoIds = await this.watchHistoryService.getWatchedVideoIds(userId.toString(), 100);
 
-      // 6. Get all ready, non-hidden videos
+      // 6. Get all ready, non-hidden videos EXCLUDING user's own videos
       const allVideos = await this.videoRepository.find({
         where: {
           status: VideoStatus.READY,
           isHidden: false,
+          userId: Not(userId.toString()), // Exclude user's own videos from recommendations
         },
         order: { createdAt: 'DESC' },
         take: limit * 3, // Get more videos to score and filter

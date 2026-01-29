@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Like, In, Not, IsNull } from 'typeorm';
 import { Message } from '../entities/message.entity';
 import { Conversation } from '../entities/conversation.entity';
 import { PushNotificationService } from '../notifications/push-notification.service';
+import { PrivacyService } from '../config/privacy.service';
 
 @Injectable()
 export class MessagesService {
@@ -13,6 +14,7 @@ export class MessagesService {
     @InjectRepository(Conversation)
     private conversationRepository: Repository<Conversation>,
     private pushNotificationService: PushNotificationService,
+    private privacyService: PrivacyService,
   ) {}
 
   private getConversationId(userId1: string, userId2: string): string {
@@ -21,6 +23,12 @@ export class MessagesService {
   }
 
   async createMessage(senderId: string, recipientId: string, content: string): Promise<Message> {
+    // Check if sender is allowed to message recipient
+    const canMessage = await this.privacyService.canSendMessage(senderId, recipientId);
+    if (!canMessage.allowed) {
+      throw new ForbiddenException(canMessage.reason || 'Bạn không được phép gửi tin nhắn cho người này');
+    }
+
     const conversationId = this.getConversationId(senderId, recipientId);
 
     // Create or update conversation
@@ -119,14 +127,14 @@ export class MessagesService {
     return this.messageRepository.count({ where: { recipientId: userId, isRead: false } });
   }
 
-  async getConversationSettings(userId: string, recipientId: string): Promise<{ isMuted: boolean; isPinned: boolean }> {
+  async getConversationSettings(userId: string, recipientId: string): Promise<{ isMuted: boolean; isPinned: boolean; themeColor: string | null; nickname: string | null }> {
     const conversationId = this.getConversationId(userId, recipientId);
     const conversation = await this.conversationRepository.findOne({
       where: { id: conversationId },
     });
 
     if (!conversation) {
-      return { isMuted: false, isPinned: false };
+      return { isMuted: false, isPinned: false, themeColor: null, nickname: null };
     }
 
     // Check if user is participant1 or participant2 to get correct settings
@@ -135,13 +143,15 @@ export class MessagesService {
     return {
       isMuted: isParticipant1 ? (conversation.isMutedBy1 ?? false) : (conversation.isMutedBy2 ?? false),
       isPinned: isParticipant1 ? (conversation.isPinnedBy1 ?? false) : (conversation.isPinnedBy2 ?? false),
+      themeColor: isParticipant1 ? (conversation.themeColorBy1 ?? null) : (conversation.themeColorBy2 ?? null),
+      nickname: isParticipant1 ? (conversation.nicknameBy1 ?? null) : (conversation.nicknameBy2 ?? null),
     };
   }
 
   async updateConversationSettings(
     userId: string,
     recipientId: string,
-    settings: { isMuted?: boolean; isPinned?: boolean },
+    settings: { isMuted?: boolean; isPinned?: boolean; themeColor?: string; nickname?: string },
   ): Promise<void> {
     const conversationId = this.getConversationId(userId, recipientId);
     let conversation = await this.conversationRepository.findOne({
@@ -176,6 +186,100 @@ export class MessagesService {
       }
     }
 
+    if (settings.themeColor !== undefined) {
+      if (isParticipant1) {
+        conversation.themeColorBy1 = settings.themeColor;
+      } else {
+        conversation.themeColorBy2 = settings.themeColor;
+      }
+    }
+
+    if (settings.nickname !== undefined) {
+      if (isParticipant1) {
+        conversation.nicknameBy1 = settings.nickname;
+      } else {
+        conversation.nicknameBy2 = settings.nickname;
+      }
+    }
+
     await this.conversationRepository.save(conversation);
+  }
+
+  // ========== PINNED MESSAGES ==========
+
+  async pinMessage(messageId: string, userId: string): Promise<Message> {
+    const message = await this.messageRepository.findOne({ where: { id: messageId } });
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    // Verify user is part of the conversation
+    if (message.senderId !== userId && message.recipientId !== userId) {
+      throw new ForbiddenException('You cannot pin this message');
+    }
+
+    message.pinnedBy = userId;
+    message.pinnedAt = new Date();
+    return this.messageRepository.save(message);
+  }
+
+  async unpinMessage(messageId: string, userId: string): Promise<Message> {
+    const message = await this.messageRepository.findOne({ where: { id: messageId } });
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    // Only the user who pinned can unpin
+    if (message.pinnedBy !== userId) {
+      throw new ForbiddenException('You cannot unpin this message');
+    }
+
+    message.pinnedBy = undefined as any;
+    message.pinnedAt = undefined as any;
+    return this.messageRepository.save(message);
+  }
+
+  async getPinnedMessages(userId: string, recipientId: string): Promise<Message[]> {
+    const conversationId = this.getConversationId(userId, recipientId);
+    return this.messageRepository.find({
+      where: { 
+        conversationId, 
+        pinnedBy: userId,
+      },
+      order: { pinnedAt: 'DESC' },
+    });
+  }
+
+  // ========== SEARCH MESSAGES ==========
+
+  async searchMessages(userId: string, recipientId: string, query: string, limit: number = 50): Promise<Message[]> {
+    const conversationId = this.getConversationId(userId, recipientId);
+    
+    return this.messageRepository
+      .createQueryBuilder('message')
+      .where('message.conversationId = :conversationId', { conversationId })
+      .andWhere('LOWER(message.content) LIKE LOWER(:query)', { query: `%${query}%` })
+      .andWhere("message.content NOT LIKE '[IMAGE:%'")
+      .andWhere("message.content NOT LIKE '[VIDEO_SHARE:%'")
+      .andWhere("message.content NOT LIKE '[STACKED_IMAGE:%'")
+      .orderBy('message.createdAt', 'DESC')
+      .take(limit)
+      .getMany();
+  }
+
+  // ========== MEDIA MESSAGES ==========
+
+  async getMediaMessages(userId: string, recipientId: string, limit: number = 50, offset: number = 0): Promise<Message[]> {
+    const conversationId = this.getConversationId(userId, recipientId);
+    
+    return this.messageRepository
+      .createQueryBuilder('message')
+      .where('message.conversationId = :conversationId', { conversationId })
+      .andWhere('message.imageUrls IS NOT NULL')
+      .andWhere("message.imageUrls != ''")
+      .orderBy('message.createdAt', 'DESC')
+      .skip(offset)
+      .take(limit)
+      .getMany();
   }
 }

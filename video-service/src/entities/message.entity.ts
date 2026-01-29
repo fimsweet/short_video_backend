@@ -22,6 +22,13 @@ export class Message {
   @Column({ type: 'boolean', default: false })
   isRead: boolean;
 
+  // Pinned by user (userId who pinned this message)
+  @Column({ nullable: true })
+  pinnedBy: string;
+
+  @Column({ nullable: true })
+  pinnedAt: Date;
+
   @CreateDateColumn()
   createdAt: Date;
 

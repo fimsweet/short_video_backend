@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Put,
   UseInterceptors,
   UploadedFile,
   Body,
@@ -113,6 +114,47 @@ export class VideosController {
     return {
       success: true,
       message: 'Video đã được xóa',
+    };
+  }
+
+  @Put(':id/privacy')
+  @HttpCode(HttpStatus.OK)
+  async updateVideoPrivacy(
+    @Param('id') id: string,
+    @Body() privacySettings: {
+      userId: string;
+      visibility?: 'public' | 'friends' | 'private';
+      allowComments?: boolean;
+      allowDuet?: boolean;
+    },
+  ) {
+    const video = await this.videosService.updateVideoPrivacy(id, privacySettings);
+    return {
+      success: true,
+      visibility: video.visibility,
+      allowComments: video.allowComments,
+      allowDuet: video.allowDuet,
+    };
+  }
+
+  @Put(':id/edit')
+  @HttpCode(HttpStatus.OK)
+  async editVideo(
+    @Param('id') id: string,
+    @Body() updateData: {
+      userId: string;
+      title?: string;
+      description?: string;
+    },
+  ) {
+    const video = await this.videosService.editVideo(id, updateData);
+    return {
+      success: true,
+      video: {
+        id: video.id,
+        title: video.title,
+        description: video.description,
+      },
     };
   }
 

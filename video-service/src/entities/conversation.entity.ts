@@ -33,6 +33,20 @@ export class Conversation {
   @Column({ default: false })
   isPinnedBy2: boolean;
 
+  // Theme color for each participant (color id like 'pink', 'purple', etc.)
+  @Column({ nullable: true })
+  themeColorBy1: string;
+
+  @Column({ nullable: true })
+  themeColorBy2: string;
+
+  // Nickname for the other participant (set by each user)
+  @Column({ nullable: true })
+  nicknameBy1: string; // nickname for participant2, set by participant1
+
+  @Column({ nullable: true })
+  nicknameBy2: string; // nickname for participant1, set by participant2
+
   @CreateDateColumn()
   createdAt: Date;
 

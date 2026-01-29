@@ -653,4 +653,97 @@ export class VideosService {
       throw error; // Throw original error with details
     }
   }
+
+  // Update video privacy settings
+  async updateVideoPrivacy(
+    videoId: string,
+    settings: {
+      userId: string;
+      visibility?: 'public' | 'friends' | 'private';
+      allowComments?: boolean;
+      allowDuet?: boolean;
+    },
+  ): Promise<Video> {
+    const video = await this.videoRepository.findOne({ where: { id: videoId } });
+
+    if (!video) {
+      throw new Error('Video not found');
+    }
+
+    if (video.userId !== settings.userId) {
+      throw new Error('Not authorized to update this video');
+    }
+
+    if (settings.visibility !== undefined) {
+      video.visibility = settings.visibility as any;
+    }
+    if (settings.allowComments !== undefined) {
+      video.allowComments = settings.allowComments;
+    }
+    if (settings.allowDuet !== undefined) {
+      video.allowDuet = settings.allowDuet;
+    }
+
+    await this.videoRepository.save(video);
+
+    // Invalidate cache
+    await this.cacheManager.del(`video:${videoId}`);
+    await this.cacheManager.del(`user_videos:${settings.userId}`);
+
+    console.log(`🔒 Video ${videoId} privacy updated: visibility=${video.visibility}, comments=${video.allowComments}, duet=${video.allowDuet}`);
+
+    return video;
+  }
+
+  // Edit video (title, description)
+  async editVideo(
+    videoId: string,
+    updateData: {
+      userId: string;
+      title?: string;
+      description?: string;
+    },
+  ): Promise<Video> {
+    const video = await this.videoRepository.findOne({ where: { id: videoId } });
+
+    if (!video) {
+      throw new Error('Video not found');
+    }
+
+    if (video.userId !== updateData.userId) {
+      throw new Error('Not authorized to edit this video');
+    }
+
+    if (updateData.title !== undefined) {
+      video.title = updateData.title;
+    }
+    if (updateData.description !== undefined) {
+      video.description = updateData.description;
+    }
+
+    await this.videoRepository.save(video);
+
+    // Invalidate cache
+    await this.cacheManager.del(`video:${videoId}`);
+    await this.cacheManager.del(`user_videos:${updateData.userId}`);
+
+    // Update Elasticsearch index - convert Video to VideoDocument
+    await this.searchService.indexVideo({
+      id: video.id,
+      userId: video.userId,
+      title: video.title,
+      description: video.description || '',
+      thumbnailUrl: video.thumbnailUrl || '',
+      hlsUrl: video.hlsUrl || '',
+      aspectRatio: video.aspectRatio || '9:16',
+      viewCount: video.viewCount || 0,
+      likeCount: 0, // Will be updated separately
+      commentCount: 0, // Will be updated separately
+      createdAt: video.createdAt,
+    });
+
+    console.log(`✏️ Video ${videoId} edited: title="${video.title}"`);
+
+    return video;
+  }
 }

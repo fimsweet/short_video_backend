@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Delete, Param, Body, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Post, Get, Delete, Param, Body, Query, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
@@ -61,8 +61,14 @@ export class CommentsController {
   }
 
   @Get('video/:videoId')
-  async getCommentsByVideo(@Param('videoId') videoId: string) {
-    return this.commentsService.getCommentsByVideo(videoId);
+  async getCommentsByVideo(
+    @Param('videoId') videoId: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    const parsedLimit = limit ? parseInt(limit, 10) : undefined;
+    const parsedOffset = offset ? parseInt(offset, 10) : undefined;
+    return this.commentsService.getCommentsByVideo(videoId, parsedLimit, parsedOffset);
   }
 
   @Get('replies/:commentId')

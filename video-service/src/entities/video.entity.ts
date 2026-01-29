@@ -9,6 +9,12 @@ export enum VideoStatus {
   FAILED = 'failed',
 }
 
+export enum VideoVisibility {
+  PUBLIC = 'public',
+  FRIENDS = 'friends',
+  PRIVATE = 'private',
+}
+
 @Entity('videos')
 export class Video {
   @PrimaryGeneratedColumn('uuid')
@@ -49,6 +55,20 @@ export class Video {
 
   @Column({ type: 'boolean', default: false })
   isHidden: boolean; // Ẩn video khỏi feed công khai
+
+  // Privacy settings for individual video
+  @Column({
+    type: 'enum',
+    enum: VideoVisibility,
+    default: VideoVisibility.PUBLIC,
+  })
+  visibility: VideoVisibility; // Ai có thể xem video này
+
+  @Column({ type: 'boolean', default: true })
+  allowComments: boolean; // Cho phép bình luận
+
+  @Column({ type: 'boolean', default: true })
+  allowDuet: boolean; // Cho phép sử dụng lại nội dung (Duet, Ghép nối...)
 
   @Column({
     type: 'enum',

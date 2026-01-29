@@ -7,6 +7,7 @@ import { Video } from '../entities/video.entity';
 import { CommentsModule } from '../comments/comments.module';
 import { SavedVideosModule } from '../saved-videos/saved-videos.module';
 import { SharesModule } from '../shares/shares.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { SharesModule } from '../shares/shares.module';
     forwardRef(() => CommentsModule),
     forwardRef(() => SavedVideosModule),
     forwardRef(() => SharesModule),
+    forwardRef(() => NotificationsModule),
   ],
   controllers: [LikesController],
   providers: [LikesService],
