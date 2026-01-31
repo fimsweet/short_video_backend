@@ -14,6 +14,7 @@ import { UserInterestsModule } from './user-interests/user-interests.module';
 import { ActivityHistoryModule } from './activity-history/activity-history.module';
 import { SessionsModule } from './sessions/sessions.module';
 import { PushModule } from './push/push.module';
+import { ReportsModule } from './reports/reports.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { PushModule } from './push/push.module';
     ActivityHistoryModule, // ✅ Activity history tracking
     SessionsModule, // ✅ Device sessions management
     PushModule, // ✅ Push notifications endpoint
+    ReportsModule, // ✅ User reports
   ],
   controllers: [AppController],
   providers: [AppService],

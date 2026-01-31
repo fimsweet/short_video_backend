@@ -285,6 +285,6 @@ export class CommentsService {
 
     // Delete all comments
     await this.commentRepository.delete({ videoId });
-    console.log(`🗑️ Deleted all comments and comment likes for video ${videoId}`);
+    console.log(`Deleted all comments and comment likes for video ${videoId}`);
   }
 }

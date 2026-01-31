@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -14,11 +14,27 @@ import { StorageService } from '../config/storage.service';
 const ffmpeg = require('fluent-ffmpeg');
 
 @Injectable()
-export class VideoProcessorService implements OnModuleInit {
+export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
   private rabbitMQUrl: string;
   private queueName: string;
   private processedDir: string;
   private videoServiceUrl: string;
+  
+  // ============================================
+  // Connection management for graceful shutdown
+  // ============================================
+  private connection: amqp.Connection | null = null;
+  private channel: amqp.Channel | null = null;
+  private isShuttingDown = false;
+  private currentJobCount = 0;
+  private retryCount = 0;
+  private readonly MAX_RETRIES = 10;
+  
+  // ============================================
+  // FFmpeg process tracking for graceful shutdown
+  // ============================================
+  // Luu reference t?i FFmpeg process dang ch?y d? cÛ th? kill khi shutdown
+  private activeFFmpegProcesses: Map<string, any> = new Map();
 
   constructor(
     @InjectRepository(Video)
@@ -34,78 +50,330 @@ export class VideoProcessorService implements OnModuleInit {
   }
 
   async onModuleInit() {
-    // T·∫°o th∆∞ m·ª•c processed_videos n·∫øu ch∆∞a c√≥
+    // T?o thu m?c processed_videos n?u chua cÛ
     if (!fs.existsSync(this.processedDir)) {
       fs.mkdirSync(this.processedDir, { recursive: true });
     }
 
-    // B·∫Øt ƒë·∫ßu l·∫Øng nghe RabbitMQ queue
+    // B?t d?u l?ng nghe RabbitMQ queue
     await this.startWorker();
   }
 
+  // ============================================
+  // Graceful Shutdown for Kubernetes
+  // ============================================
+  // Khi K8s g?i SIGTERM, pod cÛ 30s (default) d? cleanup
+  // Worker c?n:
+  // 1. Ng?ng nh?n job m?i
+  // 2. –?i job hi?n t?i ho‡n th‡nh
+  // 3. –Ûng connection
+  // ============================================
+  async onModuleDestroy() {
+    console.log('[SHUTDOWN] Received shutdown signal, gracefully stopping worker...');
+    this.isShuttingDown = true;
+
+    // Cancel consumer d? khÙng nh?n job m?i
+    if (this.channel) {
+      try {
+        await this.channel.cancel('video-worker-consumer');
+        console.log('   Stopped accepting new jobs');
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    // –?i job hi?n t?i ho‡n th‡nh (max 60s)
+    const maxWait = 60;
+    let waited = 0;
+    while (this.currentJobCount > 0 && waited < maxWait) {
+      console.log(`   Waiting for ${this.currentJobCount} job(s) to complete... (${waited}s/${maxWait}s)`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      waited++;
+    }
+
+    // ============================================
+    // Kill zombie FFmpeg processes n?u timeout
+    // ============================================
+    if (this.activeFFmpegProcesses.size > 0) {
+      console.warn(`[WARN] Killing ${this.activeFFmpegProcesses.size} hanging FFmpeg process(es)...`);
+      for (const [videoId, ffmpegCommand] of this.activeFFmpegProcesses) {
+        try {
+          ffmpegCommand.kill('SIGKILL');
+          console.log(`   Killed FFmpeg for video ${videoId}`);
+        } catch (e) {
+          // Process might already be dead
+        }
+      }
+      this.activeFFmpegProcesses.clear();
+    }
+
+    // –Ûng connection
+    if (this.channel) {
+      try {
+        await this.channel.close();
+      } catch (e) {
+        // Ignore
+      }
+    }
+    if (this.connection) {
+      try {
+        await this.connection.close();
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    console.log('[OK] Worker shutdown complete');
+  }
+
   private async startWorker(): Promise<void> {
-    console.log('üé¨ Video Worker Service started. Waiting for jobs...');
+    if (this.isShuttingDown) return;
+    
+    console.log('Video Worker Service started. Waiting for jobs...');
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 
     try {
-      const connection = await amqp.connect(this.rabbitMQUrl);
-      const channel = await connection.createChannel();
+      this.connection = await amqp.connect(this.rabbitMQUrl);
+      this.channel = await this.connection.createChannel();
 
-      await channel.assertQueue(this.queueName, { durable: true });
-      
-      // ‚úÖ MULTIPLE WORKERS: X·ª≠ l√Ω ƒë·ªìng th·ªùi nhi·ªÅu video
-      // Development: 2-3 videos, Production: 3-5 videos (t√πy CPU cores)
-      const concurrentJobs = parseInt(this.configService.get<string>('WORKER_CONCURRENCY') || '3', 10);
-      channel.prefetch(concurrentJobs);
-      
-      console.log(`‚ö° Worker configured to process ${concurrentJobs} videos concurrently`);
-
-      // ‚úÖ TRUE PARALLEL PROCESSING: Fire-and-forget pattern
-      channel.consume(this.queueName, (msg) => {
-        if (msg !== null) {
-          const job = JSON.parse(msg.content.toString());
-          console.log(`[+] Received job:`, job);
-
-          // ‚úÖ Process without blocking - multiple videos at once
-          this.processVideo(job)
-            .then(() => {
-              channel.ack(msg); // X√°c nh·∫≠n ƒë√£ x·ª≠ l√Ω xong
-              console.log(`[‚úì] Job ${job.videoId} completed and acknowledged`);
-            })
-            .catch((error) => {
-              console.error(`[-] Failed to process job ${job.videoId}:`, error);
-              channel.nack(msg, false, false); // Kh√¥ng retry
-            });
+      // ============================================
+      // Error handlers d? tr·nh unhandled error crash
+      // ============================================
+      this.connection.on('error', (err) => {
+        console.error('[ERROR] RabbitMQ connection error:', err.message);
+        if (!this.isShuttingDown) {
+          this.scheduleReconnect();
         }
       });
+
+      this.connection.on('close', () => {
+        console.warn('[WARN] RabbitMQ connection closed');
+        if (!this.isShuttingDown) {
+          this.scheduleReconnect();
+        }
+      });
+
+      this.channel.on('error', (err) => {
+        console.error('[ERROR] RabbitMQ channel error:', err.message);
+      });
+
+      this.channel.on('close', () => {
+        console.warn('[WARN] RabbitMQ channel closed');
+      });
+
+      // Reset retry count on successful connection
+      this.retryCount = 0;
+
+      // ============================================
+      // DLQ Setup - Always try to create with DLQ args
+      // ============================================
+      const dlqName = `${this.queueName}_dlq`;
+      let dlqEnabled = true;
+      
+      try {
+        // Create DLQ first
+        await this.channel.assertQueue(dlqName, { durable: true });
+        
+        // Create main queue with DLQ routing
+        // If queue exists with SAME args ? OK
+        // If queue exists with DIFFERENT args ? will throw error
+        await this.channel.assertQueue(this.queueName, { 
+          durable: true,
+          arguments: {
+            'x-dead-letter-exchange': '',
+            'x-dead-letter-routing-key': dlqName,
+          }
+        });
+        console.log(`[OK] Queue ready with DLQ support: ${this.queueName}`);
+      } catch (assertError) {
+        // Queue exists with different args (no DLQ) - fallback to simple queue
+        console.warn(`[WARN] Could not create queue with DLQ (queue exists with different args)`);
+        console.warn(`   To enable DLQ: Delete queue "${this.queueName}" in RabbitMQ and restart`);
+        
+        // ============================================
+        //  PRODUCTION WARNING: DLQ is critical!
+        // ============================================
+        if (process.env.NODE_ENV === 'production') {
+          console.error(` ------------------------------------------------------------`);
+          console.error(` CRITICAL: Running production WITHOUT Dead Letter Queue!`);
+          console.error(` Failed videos will be LOST permanently.`);
+          console.error(` `);
+          console.error(` To fix: Delete queue "${this.queueName}" in RabbitMQ Management UI`);
+          console.error(` URL: http://localhost:15672 (or your RabbitMQ host)`);
+          console.error(` Then restart this worker service.`);
+          console.error(` ------------------------------------------------------------`);
+        }
+        
+        // Reconnect because channel is closed after assertQueue fails
+        this.connection = await amqp.connect(this.rabbitMQUrl);
+        this.channel = await this.connection.createChannel();
+        
+        // Attach error handlers again
+        this.connection.on('error', (err) => {
+          if (!this.isShuttingDown) this.scheduleReconnect();
+        });
+        this.connection.on('close', () => {
+          if (!this.isShuttingDown) this.scheduleReconnect();
+        });
+        
+        // Use existing queue without DLQ
+        await this.channel.assertQueue(this.queueName, { durable: true });
+        dlqEnabled = false;
+      }
+      
+      await this.setupConsumer(this.channel, dlqName, dlqEnabled);
     } catch (error) {
-      console.error('[-] Worker could not connect to RabbitMQ:', error);
-      // Retry sau 5 gi√¢y
-      setTimeout(() => this.startWorker(), 5000);
+      console.error('[-] Worker could not connect to RabbitMQ:', error.message || error);
+      this.scheduleReconnect();
     }
+  }
+
+  // ============================================
+  // Exponential backoff for reconnection
+  // ============================================
+  private scheduleReconnect(): void {
+    if (this.isShuttingDown) return;
+    
+    this.retryCount++;
+    if (this.retryCount > this.MAX_RETRIES) {
+      console.error(`[ERROR] Max retries (${this.MAX_RETRIES}) exceeded. Giving up.`);
+      process.exit(1); // Let K8s restart the pod
+    }
+    
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
+    const delay = Math.min(1000 * Math.pow(2, this.retryCount - 1), 30000);
+    console.log(`[RETRY] Reconnecting in ${delay/1000}s... (attempt ${this.retryCount}/${this.MAX_RETRIES})`);
+    setTimeout(() => this.startWorker(), delay);
+  }
+
+  private async setupConsumer(channel: amqp.Channel, dlqName: string, dlqEnabled: boolean): Promise<void> {
+    // ============================================
+    // [WARN] CRITICAL: Concurrency Configuration for K8s
+    // ============================================
+    // KH‘NG d˘ng os.cpus() vÏ trong Docker/K8s nÛ tr? v? CPU c?a host node
+    // VÌ d?: Node cÛ 64 cores nhung Pod gi?i h?n 1 core ? code th?y 64 ? crash
+    //
+    // BEST PRACTICE cho AWS/K8s:
+    // - Set WORKER_CONCURRENCY=1 ho?c 2 trong Deployment YAML
+    // - Scale b?ng s? lu?ng Pod (Horizontal Scaling) thay vÏ nhi?u job/Pod
+    // - V?i KEDA: Queue d?y ? auto scale Pods
+    //
+    // FFmpeg l‡ CPU-bound task, ch?y nhi?u job song song trÍn 1 Pod s?:
+    // - Context switching liÍn t?c ? ch?m hon l‡m tu?n t?
+    // - Nguy co OOM cao
+    // ============================================
+    const concurrentJobs = parseInt(
+      this.configService.get<string>('WORKER_CONCURRENCY') || '1',  // Default = 1 cho K8s
+      10
+    );
+    channel.prefetch(concurrentJobs);
+    
+    // Log warning n?u concurrency > 2 trÍn production
+    if (process.env.NODE_ENV === 'production' && concurrentJobs > 2) {
+      console.warn(`[WARN] WARNING: WORKER_CONCURRENCY=${concurrentJobs} may cause performance issues on K8s`);
+      console.warn(`   Recommend: Set WORKER_CONCURRENCY=1 and scale with more Pods instead`);
+    }
+    
+    console.log(`[OK] Worker Configuration:`);
+    console.log(`   Concurrent Jobs: ${concurrentJobs} (Recommend: 1-2 for K8s)`);
+    console.log(`   Queue: ${this.queueName}`);
+    console.log(`   Dead Letter Queue: ${dlqEnabled ? dlqName : 'DISABLED (delete queue to enable)'}`);
+    console.log(`   Ready to process videos!`);
+
+    // [OK] Sequential processing pattern (better for CPU-bound FFmpeg tasks)
+    channel.consume(this.queueName, async (msg) => {
+      if (msg !== null) {
+        // Track current job for graceful shutdown
+        this.currentJobCount++;
+        
+        const job = JSON.parse(msg.content.toString());
+        const startTime = Date.now();
+        console.log(`[+] Received job: ${job.videoId}`);
+
+        try {
+          await this.processVideo(job);
+          channel.ack(msg);
+          const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+          console.log(`[?] Job ${job.videoId} completed in ${duration}s`);
+        } catch (error) {
+          console.error(`[-] Failed to process job ${job.videoId}:`, error.message);
+          
+          if (dlqEnabled) {
+            // Job chuy?n v‡o DLQ d? admin review
+            channel.nack(msg, false, false);
+            console.log(`[!] Job ${job.videoId} moved to Dead Letter Queue for manual review`);
+          } else {
+            // ============================================
+            // [WARN] FIX: Poison Pill Prevention
+            // ============================================
+            // KH‘NG requeue khi khÙng cÛ DLQ!
+            // N?u video l?i (file h?ng, codec khÙng h? tr?...), requeue s? t?o
+            // infinite loop: Error -> Requeue -> Error -> Requeue...
+            // 
+            // Gi?i ph·p: Ack message (xÛa kh?i queue) v‡ update DB = FAILED
+            // Video b? m?t nhung h? th?ng khÙng b? treo
+            // ============================================
+            channel.ack(msg); // Accept & remove from queue
+            console.error(`[!] Job ${job.videoId} FAILED and DISCARDED (no DLQ configured)`);
+            console.error(`    [WARN] WARNING: Video lost! Enable DLQ to prevent data loss.`);
+            
+            // Update DB status = FAILED
+            try {
+              await this.videoRepository.update(job.videoId, {
+                status: VideoStatus.FAILED,
+                errorMessage: `Processing failed: ${error.message}. Video discarded (no DLQ).`,
+              });
+            } catch (dbError) {
+              console.error(`    Could not update DB:`, dbError.message);
+            }
+          }
+        } finally {
+          this.currentJobCount--;
+        }
+      }
+    }, { consumerTag: 'video-worker-consumer' });
   }
 
   private async processVideo(job: any): Promise<void> {
     const { videoId, filePath, fileName } = job;
 
+    // ============================================
+    // ??? DECLARE PATHS OUTSIDE TRY FOR CLEANUP ACCESS
+    // ============================================
+    // These variables need to be accessible in catch block
+    // for proper cleanup when processing fails
+    // ============================================
+    let inputPath: string = '';
+    let outputDir: string = '';
+
     try {
       console.log(`\n${'='.repeat(60)}`);
-      console.log(`üé¨ PROCESSING VIDEO: ${videoId}`);
+      console.log(`[VIDEO] PROCESSING VIDEO: ${videoId}`);
       console.log(`${'='.repeat(60)}`);
       
-      // 1. L·∫•y th√¥ng tin video t·ª´ database
+      // 1. L?y thÙng tin video t? database
       const video = await this.videoRepository.findOne({ where: { id: videoId } });
       if (!video) {
         throw new Error(`Video ${videoId} not found in database`);
       }
 
-      console.log(`‚úÖ Video found in database`);
+      console.log(`[OK] Video found in database`);
       console.log(`   Title: ${video.title}`);
       console.log(`   User: ${video.userId}`);
 
-      // 2. Chu·∫©n b·ªã ƒë∆∞·ªùng d·∫´n
-      const inputPath = path.resolve(process.cwd(), '..', 'video-service', filePath);
+      // 2. Chu?n b? du?ng d?n
+      // ============================================
+      // ?? DOCKER/K8S COMPATIBLE PATH RESOLUTION
+      // ============================================
+      // In Docker: Both services mount shared volume at /app/uploads
+      // Set UPLOAD_ROOT_PATH=/app/uploads in docker-compose
+      // Locally: Falls back to ../video-service (dev environment)
+      // ============================================
+      const uploadRoot = this.configService.get<string>('UPLOAD_ROOT_PATH') 
+        || path.resolve(process.cwd(), '..', 'video-service');
+      inputPath = path.join(uploadRoot, filePath);
       const outputFileName = path.parse(fileName).name;
-      const outputDir = path.join(this.processedDir, outputFileName);
+      outputDir = path.join(this.processedDir, outputFileName);
 
       // Check if input file exists
       if (!fs.existsSync(inputPath)) {
@@ -113,26 +381,49 @@ export class VideoProcessorService implements OnModuleInit {
       }
 
       const stats = fs.statSync(inputPath);
-      console.log(`‚úÖ Input file found: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+      console.log(`[OK] Input file found: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+
+      // ============================================
+      // ??? VALIDATION: Check Video Duration
+      // ============================================
+      // Short video platforms typically limit video length:
+      // - TikTok: up to 10 minutes (was 3 min, expanded in 2022)
+      // - Instagram Reels: up to 90 seconds (feed) / 15 min (upload)
+      // - YouTube Shorts: up to 60 seconds
+      // We allow 10 minutes to match TikTok's current limit
+      // ============================================
+      const MAX_VIDEO_DURATION_SECONDS = 600; // 10 minutes max (like TikTok)
+      
+      console.log(`[TIME] Checking video duration...`);
+      const videoDuration = await this.getVideoDuration(inputPath);
+      console.log(`   Duration: ${videoDuration.toFixed(1)} seconds`);
+      
+      if (videoDuration > MAX_VIDEO_DURATION_SECONDS) {
+        throw new Error(
+          `Video too long (${videoDuration.toFixed(0)}s). ` +
+          `Maximum allowed duration for short videos is ${MAX_VIDEO_DURATION_SECONDS}s (${MAX_VIDEO_DURATION_SECONDS / 60} minutes). ` +
+          `Please trim your video and try again.`
+        );
+      }
 
       if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
       }
 
-      console.log(`üìÅ Input: ${inputPath}`);
-      console.log(`üìÅ Output: ${outputDir}`);
+      console.log(`[PATH] Input: ${inputPath}`);
+      console.log(`[PATH] Output: ${outputDir}`);
 
       // 3. Get original video aspect ratio using ffprobe
-      console.log(`üîç Detecting video aspect ratio...`);
+      console.log(`[DETECT] Detecting video aspect ratio...`);
       const originalAspectRatio = await this.getVideoAspectRatio(inputPath);
-      console.log(`‚úÖ Aspect ratio: ${originalAspectRatio}`);
+      console.log(`[OK] Aspect ratio: ${originalAspectRatio}`);
 
-      // 4. X·ª≠ l√Ω video b·∫±ng FFmpeg (convert sang HLS)
-      console.log(`üéûÔ∏è Starting FFmpeg conversion...`);
-      await this.convertToHLS(inputPath, outputDir);
+      // 4. X? l˝ video b?ng FFmpeg (convert sang HLS)
+      console.log(`[FFMPEG] Starting FFmpeg conversion...`);
+      await this.convertToHLS(inputPath, outputDir, videoId, originalAspectRatio);
 
-      // 5. T·∫°o thumbnail t·ª´ video
-      console.log(`üì∏ Generating thumbnail...`);
+      // 5. T?o thumbnail t? video
+      console.log(`[THUMB] Generating thumbnail...`);
       await this.generateThumbnail(inputPath, outputDir);
 
       // 6. Upload to S3 or use local paths
@@ -140,35 +431,35 @@ export class VideoProcessorService implements OnModuleInit {
       let thumbnailUrl: string | null;
 
       if (this.storageService.isEnabled()) {
-        // Upload to AWS S3
-        console.log(`‚òÅÔ∏è Uploading to S3...`);
+        // Upload to AWS S3 (with parallel upload for performance)
+        console.log(`[S3] Uploading to S3 (parallel mode)...`);
         const uploadResult = await this.storageService.uploadProcessedVideo(outputDir, videoId);
         hlsUrl = uploadResult.hlsUrl;
         thumbnailUrl = uploadResult.thumbnailUrl;
 
         // Clean up local processed files after S3 upload
-        console.log(`üßπ Cleaning up local processed files...`);
+        console.log(`[CLEANUP] Cleaning up local processed files...`);
         fs.rmSync(outputDir, { recursive: true, force: true });
       } else {
-        // Use local paths
-        hlsUrl = `/uploads/processed_videos/${outputFileName}/playlist.m3u8`;
+        // Use local paths - ABR uses master.m3u8 as entry point
+        hlsUrl = `/uploads/processed_videos/${outputFileName}/master.m3u8`;
         thumbnailUrl = `/uploads/processed_videos/${outputFileName}/thumbnail.jpg`;
       }
 
       // 7. Delete raw video file to save storage (best practice for video platforms)
       // Raw videos are no longer needed after HLS conversion is complete
-      console.log(`üóëÔ∏è Deleting raw video file to save storage...`);
+      console.log(`[DELETE] Deleting raw video file to save storage...`);
       try {
         if (fs.existsSync(inputPath)) {
           fs.unlinkSync(inputPath);
-          console.log(`‚úÖ Raw video deleted: ${inputPath}`);
+          console.log(`[OK] Raw video deleted: ${inputPath}`);
         }
       } catch (deleteError) {
         // Log but don't fail - raw video deletion is not critical
-        console.warn(`‚ö†Ô∏è Could not delete raw video: ${deleteError.message}`);
+        console.warn(`[WARN] Could not delete raw video: ${deleteError.message}`);
       }
 
-      // 8. C·∫≠p nh·∫≠t database v·ªõi aspect ratio v√† thumbnail
+      // 8. C?p nh?t database v?i aspect ratio v‡ thumbnail
       await this.videoRepository.update(videoId, {
         status: VideoStatus.READY,
         hlsUrl: hlsUrl,
@@ -180,20 +471,45 @@ export class VideoProcessorService implements OnModuleInit {
       await this.notifyProcessingComplete(videoId, video.userId);
 
       console.log(`\n${'='.repeat(60)}`);
-      console.log(`‚úÖ VIDEO PROCESSING COMPLETED: ${videoId}`);
+      console.log(`[OK] VIDEO PROCESSING COMPLETED: ${videoId}`);
       console.log(`   HLS URL: ${hlsUrl}`);
       console.log(`   Thumbnail URL: ${thumbnailUrl}`);
       console.log(`   Aspect Ratio: ${originalAspectRatio}`);
       console.log(`${'='.repeat(60)}\n`);
     } catch (error) {
       console.error(`\n${'='.repeat(60)}`);
-      console.error(`‚ùå ERROR PROCESSING VIDEO: ${videoId}`);
+      console.error(`[ERROR] ERROR PROCESSING VIDEO: ${videoId}`);
       console.error(`${'='.repeat(60)}`);
       console.error(`Error details:`, error);
       console.error(`Stack trace:`, error.stack);
       console.error(`${'='.repeat(60)}\n`);
 
-      // C·∫≠p nh·∫≠t status th√†nh FAILED
+      // ============================================
+      // [CLEANUP] CLEANUP ON FAILURE - Prevent Disk Full
+      // ============================================
+      // When processing fails (duration exceeded, corrupt file, 
+      // ffmpeg crash, etc.), we MUST clean up:
+      // 1. Raw video file (inputPath) - no longer needed
+      // 2. Partial output directory (outputDir) - incomplete HLS files
+      // This prevents disk space exhaustion on long-running systems
+      // ============================================
+      try {
+        if (inputPath && fs.existsSync(inputPath)) {
+          console.log(`[CLEANUP] Cleanup: Deleting raw video file of failed job...`);
+          fs.unlinkSync(inputPath);
+          console.log(`   [OK] Deleted raw file: ${inputPath}`);
+        }
+        if (outputDir && fs.existsSync(outputDir)) {
+          console.log(`[CLEANUP] Cleanup: Removing incomplete output directory...`);
+          fs.rmSync(outputDir, { recursive: true, force: true });
+          console.log(`   [OK] Deleted output dir: ${outputDir}`);
+        }
+      } catch (cleanupError) {
+        // Log but don't throw - cleanup failure shouldn't mask original error
+        console.error(`[WARN] Cleanup failed (manual intervention may be needed):`, cleanupError.message);
+      }
+
+      // C?p nh?t status th‡nh FAILED
       await this.videoRepository.update(videoId, {
         status: VideoStatus.FAILED,
         errorMessage: error.message || 'Unknown error',
@@ -235,41 +551,209 @@ export class VideoProcessorService implements OnModuleInit {
     });
   }
 
-  private convertToHLS(inputPath: string, outputDir: string): Promise<void> {
+  /**
+   * ============================================
+   * [TIME] GET VIDEO DURATION
+   * ============================================
+   * Use ffprobe to get video duration in seconds
+   * Used for validation (reject videos > MAX_DURATION)
+   * ============================================
+   */
+  private getVideoDuration(inputPath: string): Promise<number> {
     return new Promise((resolve, reject) => {
-      ffmpeg(inputPath)
+      ffmpeg.ffprobe(inputPath, (err, metadata) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        const duration = metadata.format?.duration || 0;
+        resolve(duration);
+      });
+    });
+  }
+
+  // ============================================
+  // ?? ADAPTIVE BITRATE STREAMING (ABR)
+  // ============================================
+  // T?o master.m3u8 v?i nhi?u ch?t lu?ng d? player t? ch?n
+  // theo di?u ki?n m?ng c?a user (nhu YouTube, Netflix)
+  //
+  // Variants du?c t?o:
+  // - 720p (HD)   : M?ng t?t, WiFi
+  // - 480p (SD)   : M?ng trung bÏnh, 4G
+  // - 360p (Low)  : M?ng y?u, 3G
+  // ============================================
+  private async convertToHLS(inputPath: string, outputDir: string, videoId?: string, originalAspectRatio: string = '16:9'): Promise<void> {
+    console.log(`[VIDEO] [ABR] Starting Adaptive Bitrate encoding...`);
+    console.log(`   Original aspect ratio: ${originalAspectRatio}`);
+    
+    // Define quality variants for ABR
+    // Bitrate recommendations from Apple HLS Authoring Specification
+    const variants = [
+      { name: '720p', height: 720, bitrate: '2500k', audioBitrate: '128k' },
+      { name: '480p', height: 480, bitrate: '1200k', audioBitrate: '96k' },
+      { name: '360p', height: 360, bitrate: '600k', audioBitrate: '64k' },
+    ];
+
+    // Process each variant sequentially to avoid memory issues
+    for (const variant of variants) {
+      console.log(`?? [ABR] Encoding ${variant.name} variant...`);
+      await this.encodeVariant(inputPath, outputDir, variant, videoId);
+    }
+
+    // Generate master playlist that references all variants
+    console.log(`[ABR] [ABR] Generating master playlist...`);
+    await this.generateMasterPlaylist(outputDir, variants, originalAspectRatio);
+    
+    console.log(`[OK] [ABR] Adaptive Bitrate encoding completed!`);
+    console.log(`   Variants: ${variants.map(v => v.name).join(', ')}`);
+  }
+
+  private encodeVariant(
+    inputPath: string, 
+    outputDir: string, 
+    variant: { name: string; height: number; bitrate: string; audioBitrate: string },
+    videoId?: string
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const variantDir = path.join(outputDir, variant.name);
+      
+      // Create variant subdirectory
+      if (!fs.existsSync(variantDir)) {
+        fs.mkdirSync(variantDir, { recursive: true });
+      }
+
+      const command = ffmpeg(inputPath)
         .outputOptions([
+          // Video codec
           '-c:v libx264',
           '-c:a aac',
-          '-preset slow',
-          '-crf 22',
-          '-sc_threshold 0',
-          '-g 48',
+          
+          // ============================================
+          // Performance Settings for K8s/Cloud
+          // ============================================
+          '-preset fast',        // Fast encoding, good for cloud costs
+          '-profile:v main',     // Broad device compatibility
+          '-level 3.1',          // Mobile device compatibility
+          
+          // Bitrate control
+          `-b:v ${variant.bitrate}`,
+          `-maxrate ${variant.bitrate}`,
+          `-bufsize ${parseInt(variant.bitrate) * 2}k`,
+          `-b:a ${variant.audioBitrate}`,
+          '-ar 44100',
+          
+          // Scale to target height, maintain aspect ratio
+          // -2 ensures width is divisible by 2 (required by h264)
+          `-vf scale=-2:${variant.height}`,
+          
+          // Keyframe settings for smooth ABR switching
+          '-g 48',               // GOP size = 2 seconds at 24fps
           '-keyint_min 48',
+          '-sc_threshold 0',     // Disable scene change detection for consistent segments
           
-
-          "-vf scale='if(gt(iw/ih,9/16),1080,-2)':'if(gt(iw/ih,9/16),-2,1920)':flags=lanczos",
+          // Memory optimization for K8s
+          '-max_muxing_queue_size 1024',
           
-          '-hls_time 10',
+          // HLS Settings
+          '-hls_time 6',                      // 6 second segments (Apple recommended)
           '-hls_playlist_type vod',
-          `-hls_segment_filename ${outputDir}/segment%03d.ts`,
+          '-hls_flags independent_segments',  // Each segment can be decoded independently
+          '-hls_segment_type mpegts',
+          `-hls_segment_filename ${variantDir}/segment%03d.ts`,
         ])
-        .output(`${outputDir}/playlist.m3u8`)
+        .output(`${variantDir}/playlist.m3u8`)
         .on('start', (commandLine) => {
-          console.log('[FFmpeg] Command:', commandLine);
+          console.log(`[FFmpeg ${variant.name}] Starting...`);
+          // Track process for graceful shutdown
+          if (videoId) {
+            this.activeFFmpegProcesses.set(`${videoId}_${variant.name}`, command);
+          }
         })
         .on('progress', (progress) => {
-          console.log(`[FFmpeg] Processing: ${progress.percent?.toFixed(2)}%`);
+          if (progress.percent) {
+            console.log(`[FFmpeg ${variant.name}] ${progress.percent.toFixed(1)}%`);
+          }
         })
         .on('end', () => {
-          console.log('[FFmpeg] Conversion completed');
+          console.log(`[FFmpeg ${variant.name}] [OK] Completed`);
+          if (videoId) {
+            this.activeFFmpegProcesses.delete(`${videoId}_${variant.name}`);
+          }
           resolve();
         })
         .on('error', (err) => {
-          console.error('[FFmpeg] Error:', err);
+          console.error(`[FFmpeg ${variant.name}] [ERROR] Error:`, err.message);
+          if (videoId) {
+            this.activeFFmpegProcesses.delete(`${videoId}_${variant.name}`);
+          }
           reject(err);
         })
         .run();
+    });
+  }
+
+  // ============================================
+  // Generate HLS Master Playlist (master.m3u8)
+  // ============================================
+  // This file tells the player about available quality options
+  // Player uses BANDWIDTH to automatically select best quality
+  // ============================================
+  private generateMasterPlaylist(
+    outputDir: string,
+    variants: { name: string; height: number; bitrate: string; audioBitrate: string }[],
+    originalAspectRatio: string = '16:9'
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      try {
+        let masterContent = '#EXTM3U\n';
+        masterContent += '#EXT-X-VERSION:3\n';
+        masterContent += '\n';
+
+        // ============================================
+        // [VIDEO] DYNAMIC RESOLUTION CALCULATION
+        // ============================================
+        // Parse aspect ratio to calculate correct width for each variant
+        // This ensures portrait (9:16), landscape (16:9), and square (1:1) videos
+        // all have correct resolution metadata in the HLS manifest
+        // ============================================
+        let aspectRatio = 16 / 9; // Default landscape
+        if (originalAspectRatio && originalAspectRatio.includes(':')) {
+          const [w, h] = originalAspectRatio.split(':').map(Number);
+          if (w > 0 && h > 0) {
+            aspectRatio = w / h;
+          }
+        }
+        console.log(`   Calculated aspect ratio: ${aspectRatio.toFixed(3)} (from ${originalAspectRatio})`);
+
+        for (const variant of variants) {
+          // Calculate total bandwidth (video + audio) in bits per second
+          const videoBitrate = parseInt(variant.bitrate) * 1000;
+          const audioBitrate = parseInt(variant.audioBitrate) * 1000;
+          const totalBandwidth = videoBitrate + audioBitrate;
+          
+          // Calculate width based on ACTUAL aspect ratio
+          // For portrait (9:16): height=720, ratio=0.5625 ? width=405
+          // For landscape (16:9): height=720, ratio=1.778 ? width=1280
+          // Ensure width is even (required by H.264)
+          let width = Math.round(variant.height * aspectRatio);
+          if (width % 2 !== 0) width++; // Make even
+          
+          masterContent += `#EXT-X-STREAM-INF:BANDWIDTH=${totalBandwidth},RESOLUTION=${width}x${variant.height},NAME="${variant.name}"\n`;
+          masterContent += `${variant.name}/playlist.m3u8\n`;
+        }
+
+        const masterPath = path.join(outputDir, 'master.m3u8');
+        fs.writeFileSync(masterPath, masterContent);
+        
+        console.log(`[OK] [ABR] Master playlist created: ${masterPath}`);
+        console.log(`   Content:\n${masterContent}`);
+        
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
     });
   }
 
@@ -277,7 +761,7 @@ export class VideoProcessorService implements OnModuleInit {
     return new Promise((resolve, reject) => {
       const thumbnailPath = `${outputDir}/thumbnail.jpg`;
       
-      console.log(`üì∏ Generating thumbnail at: ${thumbnailPath}`);
+      console.log(`[THUMB] Generating thumbnail at: ${thumbnailPath}`);
       
       // Use FFmpeg to create thumbnail with proper aspect ratio
       ffmpeg(inputPath)
@@ -300,10 +784,10 @@ export class VideoProcessorService implements OnModuleInit {
           // Verify file was created
           if (fs.existsSync(thumbnailPath)) {
             const stats = fs.statSync(thumbnailPath);
-            console.log(`‚úÖ Thumbnail generated successfully: ${(stats.size / 1024).toFixed(2)} KB`);
+            console.log(`[OK] Thumbnail generated successfully: ${(stats.size / 1024).toFixed(2)} KB`);
             resolve(thumbnailPath);
           } else {
-            console.error('‚ùå Thumbnail file not created');
+            console.error('[ERROR] Thumbnail file not created');
             resolve('');
           }
         })
@@ -319,7 +803,7 @@ export class VideoProcessorService implements OnModuleInit {
   // Notify video-service to invalidate cache after processing
   private async notifyProcessingComplete(videoId: string, userId: string): Promise<void> {
     try {
-      console.log(`üîÑ Notifying video-service to invalidate cache for video ${videoId}...`);
+      console.log(`[RETRY] Notifying video-service to invalidate cache for video ${videoId}...`);
       
       await firstValueFrom(
         this.httpService.post(
@@ -329,10 +813,10 @@ export class VideoProcessorService implements OnModuleInit {
         )
       );
       
-      console.log(`‚úÖ Video-service cache invalidated for video ${videoId}`);
+      console.log(`[OK] Video-service cache invalidated for video ${videoId}`);
     } catch (error) {
       // Log error but don't fail the processing - cache will eventually expire
-      console.error(`‚ö†Ô∏è Failed to notify video-service for cache invalidation:`, error.message);
+      console.error(`[WARN] Failed to notify video-service for cache invalidation:`, error.message);
     }
   }
 }

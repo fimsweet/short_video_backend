@@ -34,9 +34,9 @@ export class NotificationsController {
 
   @Get('unread/:userId')
   async getUnreadCount(@Param('userId') userId: string) {
-    console.log(`📊 Getting unread count for user ${userId}`);
+    console.log(`Getting unread count for user ${userId}`);
     const count = await this.notificationsService.getUnreadCount(userId);
-    console.log(`✅ Unread count: ${count}`);
+    console.log(`Unread count: ${count}`);
     return { success: true, count };
   }
 

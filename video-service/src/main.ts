@@ -1,4 +1,4 @@
-import { NestFactory } from '@nestjs/core';
+﻿import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
@@ -54,7 +54,7 @@ async function bootstrap() {
   }
 
   app.use('/uploads/processed_videos', (req, res, next) => {
-    console.log('📥 Serving file:', req.url);
+    console.log('Serving file:', req.url);
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET');
     res.header('Cross-Origin-Resource-Policy', 'cross-origin');
@@ -82,7 +82,7 @@ async function bootstrap() {
   const port = process.env.PORT || 3001;
   await app.listen(port);
 
-  console.log(`🚀 Video service is running on http://localhost:${port}`);
-  console.log(`🔌 WebSocket available at ws://localhost:${port}/chat`);
+  console.log(`Video service is running on http://localhost:${port}`);
+  console.log(`WebSocket available at ws://localhost:${port}/chat`);
 }
 bootstrap();

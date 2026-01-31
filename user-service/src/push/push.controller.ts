@@ -1,4 +1,4 @@
-import { Controller, Post, Body } from '@nestjs/common';
+﻿import { Controller, Post, Body } from '@nestjs/common';
 import { FcmService } from '../fcm/fcm.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -79,7 +79,7 @@ export class PushController {
         failed: result.failureCount,
       };
     } catch (error) {
-      console.error('❌ Error sending push notification:', error);
+      console.error('[ERROR] Error sending push notification:', error);
       return {
         success: false,
         error: error.message,

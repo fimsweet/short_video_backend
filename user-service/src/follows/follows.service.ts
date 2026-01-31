@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
@@ -197,9 +197,10 @@ export class FollowsService {
   /**
    * Get suggested users to follow based on multiple criteria:
    * 1. Friends of friends (people followed by people you follow)
-   * 2. Popular users (most followers)
-   * 3. Recently active users
-   * 4. Users not already followed
+   * 2. Users with similar taste (liked same videos)
+   * 3. Creators of videos you liked
+   * 4. Popular users (most followers)
+   * 5. Users not already followed
    */
   async getSuggestions(userId: number, limit: number = 10): Promise<{
     id: number;
@@ -226,7 +227,33 @@ export class FollowsService {
       .limit(limit)
       .getRawMany();
 
-    // 2. Get popular users (most followers)
+    // 2. Get users with similar taste and creators of liked videos from video-service
+    let similarUsers: { userId: number; commonLikes: number }[] = [];
+    let likedCreators: { userId: number; likedVideosCount: number }[] = [];
+    
+    try {
+      const videoServiceUrl = this.configService.get<string>('VIDEO_SERVICE_URL') || 'http://localhost:3001';
+      
+      // Get users who liked similar videos
+      const similarResponse = await firstValueFrom(
+        this.httpService.get(`${videoServiceUrl}/likes/similar-users/${userId}`, {
+          params: { excludeIds: excludeIds.join(','), limit: limit.toString() }
+        })
+      );
+      similarUsers = similarResponse.data || [];
+
+      // Get creators of videos user liked
+      const creatorsResponse = await firstValueFrom(
+        this.httpService.get(`${videoServiceUrl}/likes/liked-creators/${userId}`, {
+          params: { excludeIds: excludeIds.join(','), limit: limit.toString() }
+        })
+      );
+      likedCreators = creatorsResponse.data || [];
+    } catch (e) {
+      console.error('Error fetching suggestions from video-service:', e.message);
+    }
+
+    // 3. Get popular users (most followers)
     const popularUsers = await this.followRepository
       .createQueryBuilder('f')
       .select('f.followingId', 'userId')
@@ -237,17 +264,70 @@ export class FollowsService {
       .limit(limit)
       .getRawMany();
 
-    // Combine and deduplicate suggestions
-    const suggestionMap = new Map<number, { mutualCount: number; followerCount: number; reason: string }>();
+    // Combine and deduplicate suggestions with scoring
+    const suggestionMap = new Map<number, { 
+      mutualCount: number; 
+      followerCount: number; 
+      similarTasteScore: number;
+      likedCreatorScore: number;
+      reason: string;
+      score: number;
+    }>();
 
-    // Add friends of friends
+    // Add friends of friends (highest priority - social graph)
     for (const fof of friendsOfFriends) {
       const uid = parseInt(fof.userId);
-      if (!suggestionMap.has(uid)) {
+      const mutualCount = parseInt(fof.mutualCount);
+      suggestionMap.set(uid, {
+        mutualCount,
+        followerCount: 0,
+        similarTasteScore: 0,
+        likedCreatorScore: 0,
+        reason: 'mutual_friends',
+        score: mutualCount * 100, // High weight for mutual friends
+      });
+    }
+
+    // Add users with similar taste (content graph)
+    for (const similar of similarUsers) {
+      const uid = similar.userId;
+      const existing = suggestionMap.get(uid);
+      if (existing) {
+        existing.similarTasteScore = similar.commonLikes;
+        existing.score += similar.commonLikes * 50;
+        if (existing.reason === 'mutual_friends') {
+          existing.reason = 'friends_and_similar_taste';
+        }
+      } else {
         suggestionMap.set(uid, {
-          mutualCount: parseInt(fof.mutualCount),
+          mutualCount: 0,
           followerCount: 0,
-          reason: 'mutual_friends',
+          similarTasteScore: similar.commonLikes,
+          likedCreatorScore: 0,
+          reason: 'similar_taste',
+          score: similar.commonLikes * 50,
+        });
+      }
+    }
+
+    // Add creators of liked videos
+    for (const creator of likedCreators) {
+      const uid = creator.userId;
+      const existing = suggestionMap.get(uid);
+      if (existing) {
+        existing.likedCreatorScore = creator.likedVideosCount;
+        existing.score += creator.likedVideosCount * 75;
+        if (!existing.reason.includes('liked_creator')) {
+          existing.reason = existing.reason === 'suggested' ? 'liked_their_content' : existing.reason;
+        }
+      } else {
+        suggestionMap.set(uid, {
+          mutualCount: 0,
+          followerCount: 0,
+          similarTasteScore: 0,
+          likedCreatorScore: creator.likedVideosCount,
+          reason: 'liked_their_content',
+          score: creator.likedVideosCount * 75,
         });
       }
     }
@@ -255,20 +335,29 @@ export class FollowsService {
     // Add popular users
     for (const pop of popularUsers) {
       const uid = parseInt(pop.userId);
-      if (!suggestionMap.has(uid)) {
+      const followerCount = parseInt(pop.followerCount);
+      const existing = suggestionMap.get(uid);
+      if (existing) {
+        existing.followerCount = followerCount;
+        existing.score += Math.min(followerCount, 100) * 10; // Cap popularity score
+      } else {
         suggestionMap.set(uid, {
           mutualCount: 0,
-          followerCount: parseInt(pop.followerCount),
+          followerCount,
+          similarTasteScore: 0,
+          likedCreatorScore: 0,
           reason: 'popular',
+          score: Math.min(followerCount, 100) * 10,
         });
-      } else {
-        const existing = suggestionMap.get(uid)!;
-        existing.followerCount = parseInt(pop.followerCount);
       }
     }
 
     // Get user details for all suggestions
-    const suggestionIds = Array.from(suggestionMap.keys()).slice(0, limit);
+    const sortedSuggestions = Array.from(suggestionMap.entries())
+      .sort((a, b) => b[1].score - a[1].score)
+      .slice(0, limit);
+    
+    const suggestionIds = sortedSuggestions.map(([id]) => id);
     
     if (suggestionIds.length === 0) {
       // Fallback: get any users not followed
@@ -297,28 +386,88 @@ export class FollowsService {
       .andWhere('u.isDeactivated = false OR u.isDeactivated IS NULL')
       .getMany();
 
-    // Build final result with all details
-    const result = users.map(user => {
-      const suggestion = suggestionMap.get(user.id) || { mutualCount: 0, followerCount: 0, reason: 'suggested' };
-      return {
-        id: user.id,
-        username: user.username,
-        fullName: user.fullName,
-        avatar: user.avatar,
-        followerCount: suggestion.followerCount,
-        mutualFriendsCount: suggestion.mutualCount,
-        reason: suggestion.reason,
-      };
-    });
+    // Build final result with all details, preserving the sorted order
+    const userMap = new Map(users.map(u => [u.id, u]));
+    const result = sortedSuggestions
+      .filter(([id]) => userMap.has(id))
+      .map(([id, suggestion]) => {
+        const user = userMap.get(id)!;
+        return {
+          id: user.id,
+          username: user.username,
+          fullName: user.fullName,
+          avatar: user.avatar,
+          followerCount: suggestion.followerCount,
+          mutualFriendsCount: suggestion.mutualCount,
+          reason: suggestion.reason,
+        };
+      });
 
-    // Sort by mutual friends first, then by follower count
-    result.sort((a, b) => {
-      if (a.mutualFriendsCount !== b.mutualFriendsCount) {
-        return b.mutualFriendsCount - a.mutualFriendsCount;
-      }
-      return b.followerCount - a.followerCount;
-    });
+    return result;
 
     return result.slice(0, limit);
+  }
+
+  /**
+   * Get mutual friends (users where both follow each other)
+   * This represents the "Friends" relationship like TikTok
+   */
+  async getMutualFriends(
+    userId: number,
+    limit: number = 20,
+    offset: number = 0
+  ): Promise<{ data: { userId: number; username: string; fullName: string | null; avatar: string | null }[]; hasMore: boolean; total: number }> {
+    // Get users that current user follows
+    const following = await this.followRepository.find({
+      where: { followerId: userId },
+      select: ['followingId'],
+    });
+    const followingIds = following.map(f => f.followingId);
+
+    if (followingIds.length === 0) {
+      return { data: [], hasMore: false, total: 0 };
+    }
+
+    // Find mutual follows - users who also follow the current user back
+    const mutualFollowsQuery = this.followRepository
+      .createQueryBuilder('f')
+      .where('f.followerId IN (:...followingIds)', { followingIds })
+      .andWhere('f.followingId = :userId', { userId });
+
+    const total = await mutualFollowsQuery.getCount();
+
+    const mutualFollows = await this.followRepository
+      .createQueryBuilder('f')
+      .select('f.followerId', 'userId')
+      .where('f.followerId IN (:...followingIds)', { followingIds })
+      .andWhere('f.followingId = :userId', { userId })
+      .skip(offset)
+      .take(limit)
+      .getRawMany();
+
+    const mutualUserIds = mutualFollows.map(m => m.userId);
+
+    if (mutualUserIds.length === 0) {
+      return { data: [], hasMore: false, total };
+    }
+
+    // Get user details
+    const users = await this.userRepository.find({
+      where: { id: In(mutualUserIds) },
+      select: ['id', 'username', 'fullName', 'avatar'],
+    });
+
+    const data = users.map(user => ({
+      userId: user.id,
+      username: user.username,
+      fullName: user.fullName,
+      avatar: user.avatar,
+    }));
+
+    return {
+      data,
+      hasMore: offset + mutualFollows.length < total,
+      total,
+    };
   }
 }

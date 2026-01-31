@@ -1,4 +1,4 @@
-import {
+﻿import {
   Controller,
   Get,
   Post,
@@ -31,7 +31,7 @@ export class UsersController {
   @UseGuards(JwtAuthGuard)
   @Get('settings')
   async getUserSettings(@Request() req) {
-    console.log('📥 GET /users/settings called');
+    console.log('GET /users/settings called');
     console.log('   Request headers:', req.headers);
     console.log('   User from JWT:', req.user);
 
@@ -39,7 +39,7 @@ export class UsersController {
     console.log(`   Fetching settings for userId: ${userId}`);
 
     const settings = await this.usersService.getUserSettings(userId);
-    console.log(`📤 Returning settings for userId ${userId}:`, settings);
+    console.log(`Returning settings for userId ${userId}:`, settings);
     return {
       success: true,
       settings,
@@ -102,18 +102,18 @@ export class UsersController {
   async hasPassword(@Request() req) {
     try {
       const userId = req.user.userId;
-      console.log(`🔐 Checking hasPassword for userId: ${userId}`);
+      console.log(`Checking hasPassword for userId: ${userId}`);
 
       if (!userId) {
-        console.error('❌ userId is undefined in request');
+        console.error('userId is undefined in request');
         return { success: false, hasPassword: false, error: 'Invalid user' };
       }
 
       const hasPassword = await this.usersService.hasPassword(userId);
-      console.log(`🔐 hasPassword result for userId ${userId}: ${hasPassword}`);
+      console.log(`hasPassword result for userId ${userId}: ${hasPassword}`);
       return { success: true, hasPassword };
     } catch (error) {
-      console.error('❌ Error in hasPassword endpoint:', error);
+      console.error('Error in hasPassword endpoint:', error);
       return { success: false, hasPassword: false, error: error.message };
     }
   }

@@ -1,4 +1,4 @@
-import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
+﻿import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 interface PushNotificationPayload {
@@ -36,14 +36,14 @@ export class PushNotificationService {
       );
 
       if (!response.ok) {
-        console.error(`❌ Failed to send push notification: ${response.status}`);
+        console.error(`[ERROR] Failed to send push notification: ${response.status}`);
         return false;
       }
 
       const result = await response.json();
       return result.success ?? false;
     } catch (error) {
-      console.error('❌ Error sending push notification:', error);
+      console.error('[ERROR] Error sending push notification:', error);
       return false;
     }
   }

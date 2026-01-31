@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Body } from '@nestjs/common';
+﻿import { Controller, Post, Get, Param, Body } from '@nestjs/common';
 import { SharesService } from './shares.service';
 
 @Controller('shares')
@@ -7,9 +7,9 @@ export class SharesController {
 
   @Post()
   async createShare(@Body() body: { videoId: string; sharerId: string; recipientId: string }) {
-    console.log('📤 Create share request:', body);
+    console.log('Create share request:', body);
     const result = await this.sharesService.createShare(body.videoId, body.sharerId, body.recipientId);
-    console.log('✅ Share result:', result);
+    console.log('Share result:', result);
     return result;
   }
 

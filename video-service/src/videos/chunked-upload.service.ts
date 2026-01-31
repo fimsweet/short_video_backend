@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+﻿import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -55,7 +55,7 @@ export class ChunkedUploadService {
       tempDir: tempUploadDir,
     });
 
-    console.log(`📦 Chunked upload initialized: ${uploadId}`);
+    console.log(`[CHUNK] Chunked upload initialized: ${uploadId}`);
     console.log(`   File: ${fileName} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
     console.log(`   Chunks: ${totalChunks}`);
 
@@ -74,14 +74,14 @@ export class ChunkedUploadService {
       await fs.promises.writeFile(chunkPath, chunkBuffer);
       upload.uploadedChunks.add(chunkIndex);
 
-      console.log(`✅ Chunk ${chunkIndex}/${upload.totalChunks} uploaded for ${uploadId}`);
+      console.log(`[OK] Chunk ${chunkIndex}/${upload.totalChunks} uploaded for ${uploadId}`);
 
       return {
         uploadedChunks: upload.uploadedChunks.size,
         totalChunks: upload.totalChunks,
       };
     } catch (error) {
-      console.error(`❌ Failed to save chunk ${chunkIndex}:`, error);
+      console.error(`[ERROR] Failed to save chunk ${chunkIndex}:`, error);
       throw new BadRequestException('Failed to save chunk');
     }
   }
@@ -99,7 +99,7 @@ export class ChunkedUploadService {
       );
     }
 
-    console.log(`🔗 Merging ${upload.totalChunks} chunks for ${uploadId}...`);
+    console.log(`[MERGE] Merging ${upload.totalChunks} chunks for ${uploadId}...`);
 
     const finalFileName = `${uuidv4()}_${upload.fileName}`;
     const finalPath = path.join('./uploads/raw_videos', finalFileName);
@@ -120,7 +120,7 @@ export class ChunkedUploadService {
 
       // Verify final file size
       const stats = fs.statSync(finalPath);
-      console.log(`✅ File merged successfully: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+      console.log(`[OK] File merged successfully: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
 
       // Clean up temp chunks
       await this.cleanupUpload(uploadId);
@@ -135,7 +135,7 @@ export class ChunkedUploadService {
         },
       };
     } catch (error) {
-      console.error(`❌ Failed to merge chunks:`, error);
+      console.error(`[ERROR] Failed to merge chunks:`, error);
       throw new BadRequestException('Failed to merge chunks');
     }
   }
@@ -163,9 +163,9 @@ export class ChunkedUploadService {
       }
 
       this.uploads.delete(uploadId);
-      console.log(`🗑️ Cleaned up upload session: ${uploadId}`);
+      console.log(`[DELETE] Cleaned up upload session: ${uploadId}`);
     } catch (error) {
-      console.error(`⚠️ Failed to cleanup upload ${uploadId}:`, error);
+      console.error(`[WARN] Failed to cleanup upload ${uploadId}:`, error);
     }
   }
 
@@ -175,7 +175,7 @@ export class ChunkedUploadService {
 
     for (const [uploadId, upload] of this.uploads.entries()) {
       if (now.getTime() - upload.createdAt.getTime() > maxAge) {
-        console.log(`🗑️ Cleaning up stale upload: ${uploadId}`);
+        console.log(`[DELETE] Cleaning up stale upload: ${uploadId}`);
         this.cleanupUpload(uploadId);
       }
     }

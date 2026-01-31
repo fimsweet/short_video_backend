@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Post } from '@nestjs/common';
+﻿import { Controller, Get, Query, Post } from '@nestjs/common';
 import { SearchService } from './search.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -90,7 +90,7 @@ export class SearchController {
         where: { status: VideoStatus.READY, isHidden: false },
       });
 
-      console.log(`📦 Syncing ${videos.length} videos to Elasticsearch...`);
+      console.log(`[SYNC] Syncing ${videos.length} videos to Elasticsearch...`);
 
       // Transform to Elasticsearch documents
       const documents = videos.map((video) => ({
@@ -116,7 +116,7 @@ export class SearchController {
         count: videos.length,
       };
     } catch (error) {
-      console.error('❌ Error syncing videos:', error.message);
+      console.error('[ERROR] Error syncing videos:', error.message);
       return {
         success: false,
         message: error.message,

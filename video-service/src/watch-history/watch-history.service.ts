@@ -1,4 +1,4 @@
-import { Injectable, Inject, forwardRef } from '@nestjs/common';
+﻿import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, MoreThan } from 'typeorm';
 import { WatchHistory } from '../entities/watch-history.entity';
@@ -65,7 +65,7 @@ export class WatchHistoryService {
     }
 
     const saved = await this.watchHistoryRepository.save(history);
-    console.log(`📺 Watch recorded: user=${userId}, video=${videoId}, ${watchPercentage.toFixed(1)}% (${watchDuration}s/${videoDuration}s)`);
+    console.log(`[WATCH] Watch recorded: user=${userId}, video=${videoId}, ${watchPercentage.toFixed(1)}% (${watchDuration}s/${videoDuration}s)`);
     
     return saved;
   }
@@ -114,7 +114,7 @@ export class WatchHistoryService {
    * - Xem lại nhiều lần = boost weight
    */
   async getWatchTimeBasedInterests(userId: string): Promise<WatchBasedInterest[]> {
-    console.log(`📊 Calculating watch-time interests for user ${userId}...`);
+    console.log(`[STATS] Calculating watch-time interests for user ${userId}...`);
 
     // Lấy 30 ngày gần nhất, chỉ những video xem ý nghĩa (>30% hoặc >10s)
     const thirtyDaysAgo = new Date();

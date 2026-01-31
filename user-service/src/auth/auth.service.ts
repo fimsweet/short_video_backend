@@ -111,7 +111,7 @@ export class AuthService {
 
         const { password: _, ...userResult } = existingUser;
         const token = await this._generateToken(existingUser);
-        console.log(`✅ Google login linked to existing account: ${existingUser.username}`);
+        console.log(`Google login linked to existing account: ${existingUser.username}`);
         return {
           message: 'Login successful',
           user: userResult,
@@ -205,7 +205,7 @@ export class AuthService {
   async phoneRegister(dto: PhoneRegisterDto) {
     // Verify Firebase token and get phone number
     const { uid, phone } = await this.firebaseAdminService.verifyPhoneToken(dto.firebaseIdToken);
-    console.log(`📱 Phone registration: ${phone} (Firebase UID: ${uid})`);
+    console.log(`Phone registration: ${phone} (Firebase UID: ${uid})`);
 
     // Check if phone already exists
     const existingPhone = await this.usersService.findByPhone(phone);
@@ -241,7 +241,7 @@ export class AuthService {
   async phoneLogin(dto: PhoneLoginDto) {
     // Verify Firebase token and get phone number
     const { uid, phone } = await this.firebaseAdminService.verifyPhoneToken(dto.firebaseIdToken);
-    console.log(`📱 Phone login: ${phone} (Firebase UID: ${uid})`);
+    console.log(`Phone login: ${phone} (Firebase UID: ${uid})`);
 
     // Find user by phone
     const user = await this.usersService.findByPhone(phone);
@@ -394,7 +394,7 @@ export class AuthService {
 
     // For now, just return success - in production, you'd send SMS
     // Firebase Phone Auth handles SMS sending on the client side
-    console.log(`📱 Phone password reset OTP for ${phone}: ${otp}`);
+    console.log(`Phone password reset OTP for ${phone}: ${otp}`);
 
     return {
       success: true,
@@ -444,7 +444,7 @@ export class AuthService {
       throw new BadRequestException('Không thể gửi email. Vui lòng thử lại sau.');
     }
 
-    console.log(`📧 Link email OTP for ${email}: ${otp}`);
+    console.log(`Link email OTP for ${email}: ${otp}`);
 
     return {
       success: true,
@@ -484,14 +484,14 @@ export class AuthService {
     // Verify Firebase token and get phone number
     const { uid, phone } = await this.firebaseAdminService.verifyPhoneToken(firebaseIdToken);
 
-    console.log(`📱 Attempting to link phone ${phone} to user ${userId}`);
+    console.log(`Attempting to link phone ${phone} to user ${userId}`);
 
     // Check if phone already exists
     const existingUser = await this.usersService.findByPhone(phone);
     if (existingUser) {
-      console.log(`📱 Phone ${phone} found - belongs to user ${existingUser.id}`);
+      console.log(`Phone ${phone} found - belongs to user ${existingUser.id}`);
       if (existingUser.id !== userId) {
-        console.log(`❌ Phone ${phone} already belongs to different user ${existingUser.id}, rejecting link for user ${userId}`);
+        console.log(`Phone ${phone} already belongs to different user ${existingUser.id}, rejecting link for user ${userId}`);
         throw new ConflictException('Số điện thoại này đã được sử dụng bởi tài khoản khác');
       }
     }
@@ -502,7 +502,7 @@ export class AuthService {
       throw new BadRequestException(result.message);
     }
 
-    console.log(`✅ Phone ${phone} linked successfully to user ${userId}`);
+    console.log(`Phone ${phone} linked successfully to user ${userId}`);
     return {
       success: true,
       message: 'Số điện thoại đã được liên kết thành công',
@@ -570,7 +570,7 @@ export class AuthService {
       throw new BadRequestException(result.message);
     }
 
-    console.log(`📱 Phone unlinked from user ${userId}`);
+    console.log(`Phone unlinked from user ${userId}`);
     return {
       success: true,
       message: 'Đã hủy liên kết số điện thoại thành công',
@@ -621,7 +621,7 @@ export class AuthService {
         throw new BadRequestException('Không thể gửi email xác thực');
       }
 
-      console.log(`📧 2FA OTP sent to ${user.email}: ${otp}`);
+      console.log(`2FA OTP sent to ${user.email}: ${otp}`);
 
       // Mask email for display
       const maskedEmail = user.email.replace(/(.{2})(.*)(@.*)/, '$1***$3');

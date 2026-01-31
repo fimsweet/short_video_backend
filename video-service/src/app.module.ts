@@ -1,10 +1,13 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { RedisCacheModule } from './config/redis-cache.module';
 import { StorageModule } from './config/storage.module';
 import { ActivityLoggerModule } from './config/activity-logger.module';
 import { PrivacyModule } from './config/privacy.module';
+import { CleanupModule } from './common/cleanup.module';
 import { HealthModule } from './health/health.module';
 import { VideosModule } from './videos/videos.module';
 import { LikesModule } from './likes/likes.module';
@@ -26,6 +29,16 @@ import { getDatabaseConfig } from './config/database.config';
       isGlobal: true,
       envFilePath: '.env',
     }),
+    // ============================================
+    // 🛡️ RATE LIMITING - Protect against DDoS
+    // ============================================
+    // Default: 100 requests per 60 seconds per IP
+    // Upload endpoints have stricter limits (see VideosController)
+    // ============================================
+    ThrottlerModule.forRoot([{
+      ttl: 60000, // 60 seconds window
+      limit: 100, // Max 100 requests per window
+    }]),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: getDatabaseConfig,
@@ -33,8 +46,9 @@ import { getDatabaseConfig } from './config/database.config';
     }),
     RedisCacheModule, // Redis cache global
     StorageModule, // AWS S3 storage (global)
-    ActivityLoggerModule, // ✅ Activity logging (global)
-    PrivacyModule, // ✅ Privacy settings check (global)
+    ActivityLoggerModule, //  Activity logging (global)
+    PrivacyModule, //  Privacy settings check (global)
+    CleanupModule, //  Auto cleanup temp files (every 6h + 3AM daily)
     HealthModule, // Health check endpoints
     VideosModule,
     LikesModule,
@@ -43,11 +57,24 @@ import { getDatabaseConfig } from './config/database.config';
     SavedVideosModule,
     MessagesModule,
     SharesModule,
-    CategoriesModule, // ✅ Video categories
-    RecommendationModule, // ✅ Video recommendations
-    WatchHistoryModule, // ✅ Watch time tracking for recommendations
-    SearchModule, // ✅ Elasticsearch search
-    AnalyticsModule, // ✅ Creator analytics
+    CategoriesModule, //  Video categories
+    RecommendationModule, //  Video recommendations
+    WatchHistoryModule, //  Watch time tracking for recommendations
+    SearchModule, //  Elasticsearch search
+    AnalyticsModule, //  Creator analytics
+  ],
+  providers: [
+    // ============================================
+    //  Global Rate Limiting Guard
+    // ============================================
+    // Applied to ALL endpoints by default
+    // Use @SkipThrottle() to bypass for specific endpoints
+    // Use @Throttle({ default: { limit: 5, ttl: 60000 } }) for stricter limits
+    // ============================================
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
   ],
 })
 export class AppModule { }

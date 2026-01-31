@@ -1,0 +1,164 @@
+# Docker Compose - Application Services
+# This file contains the NestJS microservices configuration
+# Use with: docker-compose -f docker-compose.yaml -f docker-compose.services.yaml up
+
+version: '3.8'
+
+services:
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    container_name: user_service
+    restart: always
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_HOST=mysql
+      - DATABASE_PORT=3306
+      - DATABASE_USER=admin
+      - DATABASE_PASSWORD=password
+      - DATABASE_NAME=short_video_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - app-network
+
+  video-service:
+    build:
+      context: ./video-service
+      dockerfile: Dockerfile
+    container_name: video_service
+    restart: always
+    ports:
+      - "3002:3002"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_HOST=mysql
+      - DATABASE_PORT=3306
+      - DATABASE_USER=admin
+      - DATABASE_PASSWORD=password
+      - DATABASE_NAME=short_video_db
+      - RABBITMQ_URL=amqp://user:password@rabbitmq:5672
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ELASTICSEARCH_NODE=http://elasticsearch:9200
+      # AWS S3 Configuration
+      - AWS_REGION=ap-southeast-1
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
+      - CLOUDFRONT_DOMAIN=${CLOUDFRONT_DOMAIN}
+    volumes:
+      # CRITICAL: Shared volume with video-worker for local processing
+      # Both services MUST have access to the same raw_videos directory
+      - video_uploads:/app/uploads
+    depends_on:
+      - mysql
+      - rabbitmq
+      - redis
+      - elasticsearch
+    networks:
+      - app-network
+
+  video-worker-service:
+    build:
+      context: ./video-worker-service
+      dockerfile: Dockerfile
+    container_name: video_worker_service
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - RABBITMQ_URL=amqp://user:password@rabbitmq:5672
+      - DATABASE_HOST=mysql
+      - DATABASE_PORT=3306
+      - DATABASE_USER=admin
+      - DATABASE_PASSWORD=password
+      - DATABASE_NAME=short_video_db
+      # CRITICAL: Shared upload path - must match video-service mount point
+      - UPLOAD_ROOT_PATH=/app/uploads
+      # AWS S3 Configuration
+      - AWS_REGION=ap-southeast-1
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
+      - CLOUDFRONT_DOMAIN=${CLOUDFRONT_DOMAIN}
+    volumes:
+      # CRITICAL: Shared volume - worker reads raw videos from this directory
+      # This volume MUST be the same as video-service's uploads
+      - video_uploads:/app/uploads
+      # Temporary processing directory (can be local to container)
+      - worker_temp:/app/processed_videos
+    depends_on:
+      - rabbitmq
+      - mysql
+    deploy:
+      # For Kubernetes/Swarm: Scale workers based on load
+      replicas: 2
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    networks:
+      - app-network
+
+volumes:
+  # Shared volume between video-service and video-worker-service
+  # IMPORTANT: For production with multiple worker replicas, consider:
+  # - AWS EFS (Elastic File System) for AWS deployments
+  # - NFS for on-premise deployments
+  # - Or switch to S3-based workflow where video-service uploads to S3 first
+  video_uploads:
+    driver: local
+  
+  # Worker temporary storage - does not need to be shared
+  worker_temp:
+    driver: local
+
+networks:
+  app-network:
+    driver: bridge
+
+# =============================================================================
+# PRODUCTION NOTES FOR KUBERNETES DEPLOYMENT
+# =============================================================================
+#
+# Issue: Multiple video-worker pods need access to the same raw video files
+# 
+# Solutions (choose one):
+#
+# 1. AWS EFS (Recommended for AWS):
+#    - Create EFS volume
+#    - Use AWS EFS CSI driver
+#    - Mount as ReadWriteMany PersistentVolumeClaim
+#
+# 2. S3-First Workflow (Best for true scalability):
+#    - Modify video-service to upload raw videos directly to S3
+#    - video-worker downloads from S3, processes, uploads result
+#    - No shared filesystem needed
+#    - See: docs/AWS_S3_WORKFLOW.md
+#
+# 3. NFS Server:
+#    - Deploy NFS server (or use cloud NFS like AWS EFS, Azure Files)
+#    - Use NFS CSI driver for Kubernetes
+#
+# Example Kubernetes PVC for EFS:
+# ---
+# apiVersion: v1
+# kind: PersistentVolumeClaim
+# metadata:
+#   name: video-uploads-pvc
+# spec:
+#   accessModes:
+#     - ReadWriteMany
+#   storageClassName: efs-sc
+#   resources:
+#     requests:
+#       storage: 100Gi

@@ -1,0 +1,293 @@
+# ============================================
+# KUBERNETES DEPLOYMENT + HPA + KEDA
+# For Scalable Video Processing on AWS EKS
+# ============================================
+# 
+# ARCHITECTURE:
+# ─────────────────────────────────────────────
+#   User Upload → API Service → RabbitMQ Queue
+#                                    ↓
+#                             KEDA watches queue
+#                                    ↓
+#                            Scale Worker Pods
+#                            (0 → N based on queue)
+#                                    ↓
+#                            FFmpeg Processing
+#                                    ↓
+#                              Upload to S3
+# ─────────────────────────────────────────────
+#
+# INSTALL KEDA FIRST:
+#   helm repo add kedacore https://kedacore.github.io/charts
+#   helm install keda kedacore/keda --namespace keda --create-namespace
+#
+# ============================================
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: short-video-app
+
+---
+# ============================================
+# VIDEO WORKER DEPLOYMENT
+# ============================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: video-worker
+  namespace: short-video-app
+  labels:
+    app: video-worker
+spec:
+  # Start with 0 replicas - KEDA will scale based on queue
+  replicas: 0
+  selector:
+    matchLabels:
+      app: video-worker
+  template:
+    metadata:
+      labels:
+        app: video-worker
+    spec:
+      containers:
+        - name: video-worker
+          image: your-registry/video-worker:latest
+          imagePullPolicy: Always
+          resources:
+            # ============================================
+            # RESOURCE LIMITS FOR FFMPEG
+            # ============================================
+            # FFmpeg is CPU-bound, recommend:
+            # - 1-2 vCPU per pod
+            # - 2-4 GB RAM (for video buffering)
+            # Scale horizontally with more pods, NOT vertically
+            # ============================================
+            requests:
+              cpu: "1"           # Request 1 vCPU
+              memory: "2Gi"      # Request 2GB RAM
+            limits:
+              cpu: "2"           # Max 2 vCPUs
+              memory: "4Gi"      # Max 4GB RAM
+          env:
+            # ============================================
+            # ⚠️ CRITICAL: Set WORKER_CONCURRENCY=1
+            # ============================================
+            # FFmpeg is CPU-bound. Running multiple FFmpeg 
+            # processes on 1 Pod causes:
+            # - Context switching overhead
+            # - Slower than sequential processing
+            # - OOM risk
+            #
+            # CORRECT: 1 job/pod, scale pods horizontally
+            # WRONG: 5 jobs/pod with 1 CPU limit
+            # ============================================
+            - name: WORKER_CONCURRENCY
+              value: "1"
+            - name: NODE_ENV
+              value: "production"
+            # Database
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: video-worker-secrets
+                  key: db-host
+            - name: DB_PORT
+              value: "3306"
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: video-worker-secrets
+                  key: db-username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: video-worker-secrets
+                  key: db-password
+            - name: DB_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: video-worker-secrets
+                  key: db-name
+            # RabbitMQ
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: video-worker-secrets
+                  key: rabbitmq-url
+            - name: RABBITMQ_QUEUE
+              value: "video_processing_queue"
+            # AWS S3
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: video-worker-secrets
+                  key: aws-access-key
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: video-worker-secrets
+                  key: aws-secret-key
+            - name: AWS_REGION
+              value: "ap-southeast-1"
+            - name: AWS_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: video-worker-secrets
+                  key: s3-bucket
+            # Video Service URL (for cache invalidation)
+            - name: VIDEO_SERVICE_URL
+              value: "http://video-service:3002"
+            # Port for health checks
+            - name: PORT
+              value: "3003"
+          # ============================================
+          # Health Probes for Kubernetes
+          # ============================================
+          # Liveness: restart pod nếu process treo
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 3003
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness: đợi worker sẵn sàng trước khi routing traffic
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 3003
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+      # Graceful shutdown (wait for current job to finish)
+      terminationGracePeriodSeconds: 300  # 5 minutes for FFmpeg to finish
+
+---
+# ============================================
+# KEDA SCALED OBJECT (Event-Driven Autoscaling)
+# ============================================
+# KEDA watches RabbitMQ queue and scales workers automatically
+# - Queue = 0 → Scale to 0 pods (SAVE MONEY!)
+# - Queue > 0 → Scale up proportionally
+# - Queue > 100 → Max pods
+# ============================================
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: video-worker-scaler
+  namespace: short-video-app
+spec:
+  scaleTargetRef:
+    name: video-worker
+  # Scale to 0 when no jobs (cost saving!)
+  minReplicaCount: 0
+  # Maximum pods (adjust based on budget)
+  maxReplicaCount: 20
+  # Cooldown before scaling down (finish current jobs)
+  cooldownPeriod: 300
+  # Polling interval to check queue
+  pollingInterval: 15
+  triggers:
+    - type: rabbitmq
+      metadata:
+        # RabbitMQ connection
+        host: "amqp://user:password@rabbitmq.short-video-app:5672/"
+        queueName: video_processing_queue
+        mode: QueueLength
+        # Scale 1 pod per 5 messages in queue
+        # Queue=10 → 2 pods, Queue=50 → 10 pods
+        value: "5"
+      authenticationRef:
+        name: rabbitmq-trigger-auth
+
+---
+# ============================================
+# KEDA TRIGGER AUTHENTICATION
+# ============================================
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: rabbitmq-trigger-auth
+  namespace: short-video-app
+spec:
+  secretTargetRef:
+    - parameter: host
+      name: video-worker-secrets
+      key: rabbitmq-url
+
+---
+# ============================================
+# HPA (Fallback if KEDA not installed)
+# ============================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: video-worker-hpa
+  namespace: short-video-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: video-worker
+  minReplicas: 1
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # Scale at 70% CPU (FFmpeg is CPU intensive)
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      # Wait 5 minutes before scaling down (finish current jobs)
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+    scaleUp:
+      # Scale up quickly when needed
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+        - type: Pods
+          value: 4
+          periodSeconds: 30
+      selectPolicy: Max
+
+---
+# ============================================
+# SECRETS TEMPLATE
+# ============================================
+# Create with: kubectl create secret generic video-worker-secrets \
+#   --from-literal=db-host=your-rds-endpoint \
+#   --from-literal=db-username=admin \
+#   --from-literal=db-password=your-password \
+#   --from-literal=db-name=short_video_db \
+#   --from-literal=rabbitmq-url=amqp://user:pass@rabbitmq:5672 \
+#   --from-literal=aws-access-key=AKIA... \
+#   --from-literal=aws-secret-key=... \
+#   --from-literal=s3-bucket=your-bucket
+# ============================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: video-worker-secrets
+  namespace: short-video-app
+type: Opaque
+stringData:
+  db-host: "your-rds-endpoint.region.rds.amazonaws.com"
+  db-username: "admin"
+  db-password: "CHANGE_ME"
+  db-name: "short_video_db"
+  rabbitmq-url: "amqp://user:password@rabbitmq:5672/"
+  aws-access-key: "AKIAXXXXXXXXXXXXXXXX"
+  aws-secret-key: "CHANGE_ME"
+  s3-bucket: "your-video-bucket"

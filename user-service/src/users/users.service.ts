@@ -100,11 +100,11 @@ export class UsersService {
     const cachedUser = await this.cacheManager.get<User>(cacheKey);
 
     if (cachedUser) {
-      console.log(`✅ Cache HIT for username ${username}`);
+      console.log(`Cache HIT for username ${username}`);
       return cachedUser;
     }
 
-    console.log(`⚠️ Cache MISS for username ${username} - fetching from DB`);
+    console.log(`Cache MISS for username ${username} - fetching from DB`);
     const user = await this.userRepository.findOne({
       where: { username }
     });
@@ -142,11 +142,11 @@ export class UsersService {
     const cachedUser = await this.cacheManager.get<User>(cacheKey);
 
     if (cachedUser) {
-      console.log(`✅ Cache HIT for user ID ${id}`);
+      console.log(`Cache HIT for user ID ${id}`);
       return cachedUser;
     }
 
-    console.log(`⚠️ Cache MISS for user ID ${id} - fetching from DB`);
+    console.log(`Cache MISS for user ID ${id} - fetching from DB`);
     const user = await this.userRepository.findOne({
       where: { id }
     });
@@ -287,7 +287,7 @@ export class UsersService {
     });
 
     const savedUser = await this.userRepository.save(user);
-    console.log(`📱 Created phone user: ${savedUser.username} (${data.phone})`);
+    console.log(`Created phone user: ${savedUser.username} (${data.phone})`);
 
     // Create user settings
     const userSettings = this.userSettingsRepository.create({
@@ -335,7 +335,7 @@ export class UsersService {
 
   async updateProfile(userId: number, updateData: { bio?: string; avatar?: string; gender?: string; dateOfBirth?: string }) {
     try {
-      console.log(`📝 Updating profile for user ${userId}`, updateData);
+      console.log(`Updating profile for user ${userId}`, updateData);
 
       const user = await this.userRepository.findOne({ where: { id: userId } });
       if (!user) {
@@ -359,12 +359,12 @@ export class UsersService {
       }
 
       const updatedUser = await this.userRepository.save(user);
-      console.log(`✅ Profile updated for user ${userId}`);
+      console.log(`Profile updated for user ${userId}`);
 
       // ✅ Invalidate cache when user data changes
       await this.cacheManager.del(`user:id:${userId}`);
       await this.cacheManager.del(`user:username:${updatedUser.username}`);
-      console.log(`🗑️ Cache invalidated for user ${userId}`);
+      console.log(`Cache invalidated for user ${userId}`);
 
       return {
         id: updatedUser.id,
@@ -376,7 +376,7 @@ export class UsersService {
         gender: updatedUser.gender,
       };
     } catch (error) {
-      console.error('❌ Error updating profile:', error);
+      console.error('Error updating profile:', error);
       throw error;
     }
   }
@@ -421,7 +421,7 @@ export class UsersService {
         daysUntilChange,
       };
     } catch (error) {
-      console.error('❌ Error getting username change info:', error);
+      console.error('Error getting username change info:', error);
       throw error;
     }
   }
@@ -490,7 +490,7 @@ export class UsersService {
       await this.cacheManager.del(`user:username:${oldUsername}`);
       await this.cacheManager.del(`user:username:${newUsername.toLowerCase()}`);
 
-      console.log(`✅ Username changed for user ${userId}: ${oldUsername} -> ${newUsername}`);
+      console.log(`Username changed for user ${userId}: ${oldUsername} -> ${newUsername}`);
 
       return {
         success: true,
@@ -504,7 +504,7 @@ export class UsersService {
         },
       };
     } catch (error) {
-      console.error('❌ Error changing username:', error);
+      console.error('Error changing username:', error);
       return { success: false, message: 'Error changing username' };
     }
   }
@@ -540,10 +540,10 @@ export class UsersService {
       await this.cacheManager.del(`user:id:${userId}`);
       await this.cacheManager.del(`user:username:${user.username}`);
 
-      console.log(`✅ Password changed for user ${userId}`);
+      console.log(`Password changed for user ${userId}`);
       return { success: true, message: 'Đổi mật khẩu thành công' };
     } catch (error) {
-      console.error('❌ Error changing password:', error);
+      console.error('Error changing password:', error);
       return { success: false, message: 'Lỗi khi đổi mật khẩu' };
     }
   }
@@ -551,20 +551,20 @@ export class UsersService {
   // Check if user has password (for OAuth users)
   async hasPassword(userId: number): Promise<boolean> {
     try {
-      console.log(`🔐 hasPassword service called for userId: ${userId}`);
+      console.log(`hasPassword service called for userId: ${userId}`);
       const user = await this.userRepository.findOne({ where: { id: userId } });
 
       if (!user) {
-        console.log(`🔐 User not found for userId: ${userId}`);
+        console.log(`User not found for userId: ${userId}`);
         return false;
       }
 
       // Check for both null and empty string
       const result = user.password != null && user.password.trim() !== '';
-      console.log(`🔐 User ${userId} password check: ${result ? 'HAS password' : 'NO password'}`);
+      console.log(`User ${userId} password check: ${result ? 'HAS password' : 'NO password'}`);
       return result;
     } catch (error) {
-      console.error(`❌ Error in hasPassword for userId ${userId}:`, error);
+      console.error(`Error in hasPassword for userId ${userId}:`, error);
       throw error;
     }
   }
@@ -594,10 +594,10 @@ export class UsersService {
       await this.cacheManager.del(`user:id:${userId}`);
       await this.cacheManager.del(`user:username:${user.username}`);
 
-      console.log(`✅ Password set for OAuth user ${userId}`);
+      console.log(`Password set for OAuth user ${userId}`);
       return { success: true, message: 'Đặt mật khẩu thành công' };
     } catch (error) {
-      console.error('❌ Error setting password:', error);
+      console.error('Error setting password:', error);
       return { success: false, message: 'Lỗi khi đặt mật khẩu' };
     }
   }
@@ -625,7 +625,7 @@ export class UsersService {
 
       return { success: true, message: 'Mã xác nhận hợp lệ' };
     } catch (error) {
-      console.error('❌ Error verifying OTP:', error);
+      console.error('Error verifying OTP:', error);
       return { success: false, message: 'Lỗi khi xác minh mã' };
     }
   }
@@ -650,18 +650,18 @@ export class UsersService {
       const emailSent = await this.emailService.sendOtpEmail(email, otp);
 
       if (!emailSent) {
-        console.error('❌ Failed to send OTP email');
+        console.error('Failed to send OTP email');
         return { success: false, message: 'Không thể gửi email. Vui lòng thử lại sau.' };
       }
 
-      console.log(`🔑 OTP for ${email}: ${otp}`); // Log for debugging
+      console.log(`OTP for ${email}: ${otp}`); // Log for debugging
 
       return {
         success: true,
         message: 'Mã xác nhận đã được gửi đến email của bạn'
       };
     } catch (error) {
-      console.error('❌ Error generating OTP:', error);
+      console.error('Error generating OTP:', error);
       return { success: false, message: 'Lỗi khi tạo mã xác nhận' };
     }
   }
@@ -705,10 +705,10 @@ export class UsersService {
       await this.cacheManager.del(`user:id:${user.id}`);
       await this.cacheManager.del(`user:username:${user.username}`);
 
-      console.log(`✅ Password reset successful for ${email}`);
+      console.log(`Password reset successful for ${email}`);
       return { success: true, message: 'Đặt lại mật khẩu thành công' };
     } catch (error) {
-      console.error('❌ Error resetting password:', error);
+      console.error('Error resetting password:', error);
       return { success: false, message: 'Lỗi khi đặt lại mật khẩu' };
     }
   }
@@ -730,13 +730,13 @@ export class UsersService {
     });
 
     await this.blockedUserRepository.save(blockedUser);
-    console.log(`✅ User ${blockerId} blocked user ${blockedId}`);
+    console.log(`User ${blockerId} blocked user ${blockedId}`);
   }
 
   // Unblock a user
   async unblockUser(blockerId: number, blockedId: number): Promise<void> {
     await this.blockedUserRepository.delete({ blockerId, blockedId });
-    console.log(`✅ User ${blockerId} unblocked user ${blockedId}`);
+    console.log(`User ${blockerId} unblocked user ${blockedId}`);
   }
 
   // Get list of blocked users
@@ -779,22 +779,22 @@ export class UsersService {
   async getUserSettings(userId: number): Promise<UserSettings> {
     // Check cache first
     const cacheKey = `user:settings:${userId}`;
-    console.log(`🔍 Checking cache for user settings ${userId} with key: ${cacheKey}`);
+    console.log(`Checking cache for user settings ${userId} with key: ${cacheKey}`);
     const cachedSettings = await this.cacheManager.get<UserSettings>(cacheKey);
 
     if (cachedSettings) {
-      console.log(`✅ Cache HIT for user settings ${userId}:`, cachedSettings);
+      console.log(`Cache HIT for user settings ${userId}:`, cachedSettings);
       return cachedSettings;
     }
 
-    console.log(`⚠️ Cache MISS for user settings ${userId} - fetching from DB`);
+    console.log(`Cache MISS for user settings ${userId} - fetching from DB`);
     let settings = await this.userSettingsRepository.findOne({
       where: { userId },
     });
 
     // If settings don't exist, create default settings
     if (!settings) {
-      console.log(`🆕 Creating default settings for user ${userId}`);
+      console.log(`Creating default settings for user ${userId}`);
       settings = this.userSettingsRepository.create({
         userId,
         theme: 'dark',
@@ -808,14 +808,14 @@ export class UsersService {
         language: 'vi',
       });
       settings = await this.userSettingsRepository.save(settings);
-      console.log(`✅ Default settings created for user ${userId}:`, settings);
+      console.log(`Default settings created for user ${userId}:`, settings);
     } else {
-      console.log(`✅ Settings loaded from DB for user ${userId}:`, settings);
+      console.log(`Settings loaded from DB for user ${userId}:`, settings);
     }
 
     // Cache for 30 minutes
     await this.cacheManager.set(cacheKey, settings, 1800000);
-    console.log(`💾 Settings cached for user ${userId} with key: ${cacheKey}`);
+    console.log(`Settings cached for user ${userId} with key: ${cacheKey}`);
 
     return settings;
   }
@@ -825,7 +825,7 @@ export class UsersService {
     userId: number,
     updateData: UpdateUserSettingsDto,
   ): Promise<UserSettings> {
-    console.log(`📝 updateUserSettings called for userId ${userId} with data:`, JSON.stringify(updateData));
+    console.log(`updateUserSettings called for userId ${userId} with data:`, JSON.stringify(updateData));
     
     let settings = await this.userSettingsRepository.findOne({
       where: { userId },
@@ -846,9 +846,9 @@ export class UsersService {
         language: updateData.language ?? 'vi',
         timezone: updateData.timezone,
       });
-      console.log(`🆕 Creating new settings for user ${userId}`);
+      console.log(`Creating new settings for user ${userId}`);
     } else {
-      console.log(`📊 Existing settings for user ${userId}:`, JSON.stringify(settings));
+      console.log(`Existing settings for user ${userId}:`, JSON.stringify(settings));
       // Update existing settings - only update fields that are provided
       if (updateData.theme !== undefined) settings.theme = updateData.theme;
       if (updateData.notificationsEnabled !== undefined) settings.notificationsEnabled = updateData.notificationsEnabled;
@@ -865,14 +865,14 @@ export class UsersService {
       if (updateData.whoCanSendMessages !== undefined) settings.whoCanSendMessages = updateData.whoCanSendMessages;
       if (updateData.whoCanComment !== undefined) settings.whoCanComment = updateData.whoCanComment;
       if (updateData.filterComments !== undefined) settings.filterComments = updateData.filterComments;
-      console.log(`📝 Updated settings for user ${userId}:`, JSON.stringify(settings));
+      console.log(`Updated settings for user ${userId}:`, JSON.stringify(settings));
     }
 
     const updatedSettings = await this.userSettingsRepository.save(settings);
 
     // Invalidate cache
     await this.cacheManager.del(`user:settings:${userId}`);
-    console.log(`✅ Settings saved and cache invalidated for user ${userId}`);
+    console.log(`Settings saved and cache invalidated for user ${userId}`);
 
     return updatedSettings;
   }
@@ -911,13 +911,13 @@ export class UsersService {
       await this.cacheManager.del(`user:id:${userId}`);
       await this.cacheManager.del(`user:username:${user.username}`);
 
-      console.log(`✅ Email linked for user ${userId}: ${email}${hashedPassword ? ' (with password)' : ''}`);
+      console.log(`Email linked for user ${userId}: ${email}${hashedPassword ? ' (with password)' : ''}`);
       return {
         success: true,
         message: hasRealEmail ? 'Email đã được cập nhật' : 'Email đã được thêm vào tài khoản'
       };
     } catch (error) {
-      console.error('❌ Error linking email:', error);
+      console.error('Error linking email:', error);
       return { success: false, message: 'Lỗi khi liên kết email' };
     }
   }
@@ -947,10 +947,10 @@ export class UsersService {
       await this.cacheManager.del(`user:id:${userId}`);
       await this.cacheManager.del(`user:username:${user.username}`);
 
-      console.log(`✅ Phone linked for user ${userId}: ${phone}`);
+      console.log(`Phone linked for user ${userId}: ${phone}`);
       return { success: true, message: 'Số điện thoại đã được thêm vào tài khoản' };
     } catch (error) {
-      console.error('❌ Error linking phone:', error);
+      console.error('Error linking phone:', error);
       return { success: false, message: 'Lỗi khi liên kết số điện thoại' };
     }
   }
@@ -979,10 +979,10 @@ export class UsersService {
       await this.cacheManager.del(`user:id:${userId}`);
       await this.cacheManager.del(`user:username:${user.username}`);
 
-      console.log(`✅ Phone unlinked for user ${userId}`);
+      console.log(`Phone unlinked for user ${userId}`);
       return { success: true, message: 'Đã hủy liên kết số điện thoại' };
     } catch (error) {
-      console.error('❌ Error unlinking phone:', error);
+      console.error('Error unlinking phone:', error);
       return { success: false, message: 'Lỗi khi hủy liên kết số điện thoại' };
     }
   }
@@ -998,7 +998,7 @@ export class UsersService {
       // Store Google provider ID so user can login with Google next time
       // We use a separate field or update providerId based on authProvider
       // For now, we'll just log it - the email match is enough for authentication
-      console.log(`🔗 Google account linked for user ${userId}, providerId: ${googleProviderId}`);
+      console.log(`Google account linked for user ${userId}, providerId: ${googleProviderId}`);
 
       // Optional: Store googleProviderId for faster lookup next time
       // You could add a googleProviderId column to the user entity
@@ -1008,7 +1008,7 @@ export class UsersService {
       await this.cacheManager.del(`user:id:${userId}`);
       await this.cacheManager.del(`user:username:${user.username}`);
     } catch (error) {
-      console.error('❌ Error linking Google to existing account:', error);
+      console.error('Error linking Google to existing account:', error);
     }
   }
 
@@ -1058,10 +1058,10 @@ export class UsersService {
       // Invalidate cache
       await this.cacheManager.del(`user:id:${user.id}`);
 
-      console.log(`✅ 2FA settings updated for user ${userId}: enabled=${enabled}, methods=${methods.join(',')}`);
+      console.log(`2FA settings updated for user ${userId}: enabled=${enabled}, methods=${methods.join(',')}`);
       return { success: true, message: 'Cập nhật 2FA thành công' };
     } catch (error) {
-      console.error('❌ Error updating 2FA settings:', error);
+      console.error('Error updating 2FA settings:', error);
       return { success: false, message: 'Lỗi khi cập nhật 2FA' };
     }
   }
@@ -1096,10 +1096,10 @@ export class UsersService {
       await this.cacheManager.del(`user:id:${user.id}`);
       await this.cacheManager.del(`user:username:${user.username}`);
 
-      console.log(`✅ Password reset via phone for user ${user.id}`);
+      console.log(`Password reset via phone for user ${user.id}`);
       return { success: true, message: 'Đặt lại mật khẩu thành công' };
     } catch (error) {
-      console.error('❌ Error resetting password by phone:', error);
+      console.error('Error resetting password by phone:', error);
       return { success: false, message: 'Lỗi khi đặt lại mật khẩu' };
     }
   }
@@ -1117,7 +1117,7 @@ export class UsersService {
       // Invalidate cache
       await this.cacheManager.del(`user:id:${userId}`);
     } catch (error) {
-      console.error(`❌ Error updating lastSeen for user ${userId}:`, error);
+      console.error(`Error updating lastSeen for user ${userId}:`, error);
     }
   }
 
@@ -1161,7 +1161,7 @@ export class UsersService {
 
       return { isOnline: false, lastSeen, statusText };
     } catch (error) {
-      console.error(`❌ Error getting online status for user ${userId}:`, error);
+      console.error(`Error getting online status for user ${userId}:`, error);
       return { isOnline: false, lastSeen: null, statusText: 'Offline' };
     }
   }
@@ -1197,14 +1197,14 @@ export class UsersService {
       await this.cacheManager.del(`user:${userId}`);
       await this.cacheManager.del(`user:settings:${userId}`);
 
-      console.log(`✅ Account deactivated for user ${userId}`);
+      console.log(`Account deactivated for user ${userId}`);
 
       return {
         success: true,
         message: 'Account has been deactivated. You can reactivate by logging in within 30 days.'
       };
     } catch (error) {
-      console.error(`❌ Error deactivating account for user ${userId}:`, error);
+      console.error(`Error deactivating account for user ${userId}:`, error);
       return { success: false, message: 'Failed to deactivate account' };
     }
   }
@@ -1253,7 +1253,7 @@ export class UsersService {
       user.deactivatedAt = null;
       await this.userRepository.save(user);
 
-      console.log(`✅ Account reactivated for user ${user.id}`);
+      console.log(`Account reactivated for user ${user.id}`);
 
       // Return user data for login
       const { password: _, ...userWithoutPassword } = user;
@@ -1264,7 +1264,7 @@ export class UsersService {
         user: userWithoutPassword,
       };
     } catch (error) {
-      console.error('❌ Error reactivating account:', error);
+      console.error('Error reactivating account:', error);
       return { success: false, message: 'Failed to reactivate account' };
     }
   }
@@ -1303,7 +1303,7 @@ export class UsersService {
         daysRemaining,
       };
     } catch (error) {
-      console.error('❌ Error checking deactivated status:', error);
+      console.error('Error checking deactivated status:', error);
       return { isDeactivated: false };
     }
   }

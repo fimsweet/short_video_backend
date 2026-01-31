@@ -90,17 +90,38 @@ export class FollowsController {
 
   /**
    * Get suggested users to follow
-   * Returns users based on mutual friends, popularity, etc.
+   * Returns users based on mutual friends, similar taste, liked content, popularity, etc.
    */
   @Get('suggestions/:userId')
-  async getSuggestions(@Param('userId') userId: string) {
+  async getSuggestions(
+    @Param('userId') userId: string,
+    @Query('limit') limit?: string,
+  ) {
     const suggestions = await this.followsService.getSuggestions(
       parseInt(userId, 10),
-      15, // Return up to 15 suggestions
+      limit ? parseInt(limit, 10) : 15,
     );
     return { 
       success: true,
       data: suggestions,
     };
+  }
+
+  /**
+   * Get mutual friends (users who follow each other)
+   * This is the "Friends" relationship like TikTok
+   */
+  @Get('mutual-friends/:userId')
+  async getMutualFriends(
+    @Param('userId') userId: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    const result = await this.followsService.getMutualFriends(
+      parseInt(userId, 10),
+      limit ? parseInt(limit, 10) : 20,
+      offset ? parseInt(offset, 10) : 0,
+    );
+    return result;
   }
 }

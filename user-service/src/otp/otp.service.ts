@@ -48,7 +48,7 @@ export class OtpService {
         });
 
         await this.otpRepository.save(otp);
-        console.log(`📱 OTP generated for ${identifier}: ${code} (expires at ${expiresAt})`);
+        console.log(`OTP generated for ${identifier}: ${code} (expires at ${expiresAt})`);
 
         return code;
     }
@@ -89,7 +89,7 @@ export class OtpService {
         otp.isUsed = true;
         await this.otpRepository.save(otp);
 
-        console.log(`✅ OTP verified for ${identifier}`);
+        console.log(`OTP verified for ${identifier}`);
         return true;
     }
 
@@ -104,7 +104,7 @@ export class OtpService {
             otp.attempts += 1;
             if (otp.attempts >= 5) {
                 otp.isUsed = true; // Invalidate after 5 failed attempts
-                console.log(`⚠️ OTP invalidated for ${identifier} after 5 failed attempts`);
+                console.log(`OTP invalidated for ${identifier} after 5 failed attempts`);
             }
             await this.otpRepository.save(otp);
         }
@@ -115,6 +115,6 @@ export class OtpService {
         const result = await this.otpRepository.delete({
             expiresAt: LessThan(new Date()),
         });
-        console.log(`🧹 Cleaned up ${result.affected} expired OTPs`);
+        console.log(`Cleaned up ${result.affected} expired OTPs`);
     }
 }

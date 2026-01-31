@@ -1,4 +1,4 @@
-import { Injectable, Inject, forwardRef } from '@nestjs/common';
+﻿import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Like } from '../entities/like.entity';
@@ -29,7 +29,7 @@ export class LikesService {
   ) { }
 
   async toggleLike(videoId: string, userId: string): Promise<{ liked: boolean; likeCount: number }> {
-    console.log(`🔄 Toggle like: videoId=${videoId}, userId=${userId}`);
+    console.log(`Toggle like: videoId=${videoId}, userId=${userId}`);
 
     // Get video info for activity log
     const video = await this.videoRepository.findOne({ where: { id: videoId } });
@@ -39,7 +39,7 @@ export class LikesService {
     });
 
     if (existingLike) {
-      console.log('❌ Unlike - removing existing like');
+      console.log('Unlike - removing existing like');
       await this.likeRepository.remove(existingLike);
 
       // Log unlike activity with video details
@@ -58,7 +58,7 @@ export class LikesService {
       const likeCount = await this.getLikeCount(videoId);
       return { liked: false, likeCount };
     } else {
-      console.log('❤️ Like - creating new like');
+      console.log('Like - creating new like');
       await this.likeRepository.save({
         videoId,
         userId,
@@ -88,7 +88,7 @@ export class LikesService {
             undefined,
             video.title ? `Đã thích video: ${video.title}` : 'Đã thích video của bạn',
           );
-          console.log(`✅ Like notification sent to user ${video.userId}`);
+          console.log(`Like notification sent to user ${video.userId}`);
         } catch (e) {
           console.error('Error creating like notification:', e);
         }
@@ -104,14 +104,14 @@ export class LikesService {
   }
 
   async isLikedByUser(videoId: string, userId: string): Promise<boolean> {
-    console.log(`🔍 [DB] Checking like: videoId=${videoId}, userId=${userId}`);
+    console.log(`[DB] Checking like: videoId=${videoId}, userId=${userId}`);
 
     const like = await this.likeRepository.findOne({
       where: { videoId, userId },
     });
 
     const liked = !!like;
-    console.log(`✅ [DB] Like found: ${liked}`, like ? `(id: ${like.id})` : '');
+    console.log(`[DB] Like found: ${liked}`, like ? `(id: ${like.id})` : '');
     return liked;
   }
 
@@ -123,7 +123,7 @@ export class LikesService {
   }
 
   async getLikedVideosByUser(userId: string): Promise<any[]> {
-    console.log(`🔍 Fetching liked videos for user: ${userId}`);
+    console.log(`Fetching liked videos for user: ${userId}`);
 
     // Get all likes by this user
     const likes = await this.likeRepository.find({
@@ -131,7 +131,7 @@ export class LikesService {
       order: { createdAt: 'DESC' },
     });
 
-    console.log(`📝 Found ${likes.length} total likes`);
+    console.log(`Found ${likes.length} total likes`);
 
     if (likes.length === 0) {
       return [];
@@ -146,7 +146,7 @@ export class LikesService {
       .orderBy('video.createdAt', 'DESC')
       .getMany();
 
-    console.log(`✅ Returning ${videos.length} videos (excluding user's own)`);
+    console.log(`Returning ${videos.length} videos (excluding user's own)`);
 
     // Add counts for each video (like, comment, save, share)
     const videosWithCounts = await Promise.all(
@@ -166,12 +166,82 @@ export class LikesService {
       }),
     );
 
-    console.log(`✅ Added counts to ${videosWithCounts.length} videos`);
+    console.log(`Added counts to ${videosWithCounts.length} videos`);
     return videosWithCounts;
   }
 
   async deleteAllLikesForVideo(videoId: string): Promise<void> {
     await this.likeRepository.delete({ videoId });
-    console.log(`🗑️ Deleted all likes for video ${videoId}`);
+    console.log(`Deleted all likes for video ${videoId}`);
+  }
+
+  /**
+   * Get users who liked similar videos (users with similar taste)
+   * This finds users who have liked the same videos that the current user liked
+   */
+  async getUsersWithSimilarTaste(
+    userId: string, 
+    excludeUserIds: number[] = [],
+    limit: number = 20
+  ): Promise<{ userId: number; commonLikes: number }[]> {
+    // Get videos that current user has liked
+    const userLikes = await this.likeRepository.find({
+      where: { userId },
+      select: ['videoId'],
+    });
+
+    if (userLikes.length === 0) {
+      return [];
+    }
+
+    const likedVideoIds = userLikes.map(like => like.videoId);
+    const excludeIds = [parseInt(userId), ...excludeUserIds];
+
+    // Find other users who liked the same videos
+    const similarUsers = await this.likeRepository
+      .createQueryBuilder('l')
+      .select('CAST(l.userId AS INTEGER)', 'userId')
+      .addSelect('COUNT(DISTINCT l.videoId)', 'commonLikes')
+      .where('l.videoId IN (:...likedVideoIds)', { likedVideoIds })
+      .andWhere('CAST(l.userId AS INTEGER) NOT IN (:...excludeIds)', { excludeIds })
+      .groupBy('l.userId')
+      .orderBy('commonLikes', 'DESC')
+      .limit(limit)
+      .getRawMany();
+
+    return similarUsers.map(u => ({
+      userId: parseInt(u.userId),
+      commonLikes: parseInt(u.commonLikes),
+    }));
+  }
+
+  /**
+   * Get creators of videos that the user has liked
+   * These are creators whose content the user enjoys
+   */
+  async getCreatorsOfLikedVideos(
+    userId: string,
+    excludeUserIds: number[] = [],
+    limit: number = 20
+  ): Promise<{ userId: number; likedVideosCount: number }[]> {
+    const excludeIds = [parseInt(userId), ...excludeUserIds];
+
+    // Get creators of videos that user has liked
+    const creators = await this.likeRepository
+      .createQueryBuilder('l')
+      .innerJoin(Video, 'v', 'l.videoId = v.id')
+      .select('CAST(v.userId AS INTEGER)', 'creatorId')
+      .addSelect('COUNT(DISTINCT l.videoId)', 'likedVideosCount')
+      .where('l.userId = :userId', { userId })
+      .andWhere('CAST(v.userId AS INTEGER) NOT IN (:...excludeIds)', { excludeIds })
+      .groupBy('v.userId')
+      .orderBy('likedVideosCount', 'DESC')
+      .limit(limit)
+      .getRawMany();
+
+    return creators.map(c => ({
+      userId: parseInt(c.creatorId),
+      likedVideosCount: parseInt(c.likedVideosCount),
+    }));
   }
 }

@@ -1,4 +1,4 @@
-import { Injectable, Inject, forwardRef } from '@nestjs/common';
+﻿import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SavedVideo } from '../entities/saved-video.entity';
@@ -14,19 +14,19 @@ export class SavedVideosService {
   ) {}
 
   async toggleSave(videoId: string, userId: string): Promise<{ saved: boolean; saveCount: number }> {
-    console.log(`🔄 Toggle save: videoId=${videoId}, userId=${userId}`);
+    console.log(`[TOGGLE] Toggle save: videoId=${videoId}, userId=${userId}`);
     
     const existingSave = await this.savedVideoRepository.findOne({
       where: { videoId, userId },
     });
 
     if (existingSave) {
-      console.log('❌ Unsave - removing existing save');
+      console.log('Unsave - removing existing save');
       await this.savedVideoRepository.remove(existingSave);
       const saveCount = await this.getSaveCount(videoId);
       return { saved: false, saveCount };
     } else {
-      console.log('🔖 Save - creating new save');
+      console.log('Save - creating new save');
       await this.savedVideoRepository.save({
         videoId,
         userId,
@@ -48,14 +48,14 @@ export class SavedVideosService {
   }
 
   async getSavedVideos(userId: string): Promise<any[]> {
-    console.log(`📹 Fetching saved videos for user ${userId}...`);
+    console.log(`[FETCH] Fetching saved videos for user ${userId}...`);
     
     const savedVideos = await this.savedVideoRepository.find({
       where: { userId },
       order: { createdAt: 'DESC' },
     });
 
-    console.log(`✅ Found ${savedVideos.length} saved video records`);
+    console.log(`[OK] Found ${savedVideos.length} saved video records`);
 
     // Get full video details with like/comment counts
     const videosWithDetails = await Promise.all(
@@ -77,13 +77,13 @@ export class SavedVideosService {
 
     // Filter out null values (deleted videos)
     const validVideos = videosWithDetails.filter(v => v !== null);
-    console.log(`📤 Returning ${validVideos.length} saved videos with full details`);
+    console.log(`[RETURN] Returning ${validVideos.length} saved videos with full details`);
     
     return validVideos;
   }
 
   async deleteAllSavesForVideo(videoId: string): Promise<void> {
     await this.savedVideoRepository.delete({ videoId });
-    console.log(`🗑️ Deleted all saves for video ${videoId}`);
+    console.log(`[DELETE] Deleted all saves for video ${videoId}`);
   }
 }

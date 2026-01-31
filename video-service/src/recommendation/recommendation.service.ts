@@ -30,12 +30,16 @@ interface ScoredVideo {
 
 // Algorithm weights - tunable parameters
 const WEIGHTS = {
-  INTEREST_MATCH: 0.35, // From user interests + watch time
+  INTEREST_MATCH: 0.30, // From user interests + watch time
   ENGAGEMENT: 0.25,      // Likes, views ratio
   RECENCY: 0.20,         // Newer videos preferred
-  EXPLORATION: 0.15,     // Random factor for discovery (increased from 0.1)
-  FRESHNESS: 0.05,       // Bonus for videos user hasn't seen
+  EXPLORATION: 0.15,     // Random factor for discovery
+  FRESHNESS: 0.10,       // Bonus for videos user hasn't seen (increased from 0.05)
 };
+
+// How many recently watched videos to completely exclude (not just penalize)
+// Increased to 50 because short-video users typically watch 50-100 videos per session
+const EXCLUDE_RECENTLY_WATCHED = 50;
 
 @Injectable()
 export class RecommendationService {
@@ -68,7 +72,7 @@ export class RecommendationService {
    * 
    * Algorithm: Hybrid (Content-Based + Watch Time + Engagement + Recency + Exploration)
    * 
-   * Score = (Interest Match × 0.35) + (Engagement × 0.25) + (Recency × 0.20) + (Exploration × 0.15) + (Freshness × 0.05)
+   * Score = (Interest Match � 0.35) + (Engagement � 0.25) + (Recency � 0.20) + (Exploration � 0.15) + (Freshness � 0.05)
    * 
    * Interest Match includes:
    * - Explicit interests (user selected)
@@ -81,11 +85,11 @@ export class RecommendationService {
     // Check cache first (shorter TTL for personalized content)
     const cached = await this.cacheManager.get(cacheKey);
     if (cached) {
-      console.log(`✅ Cache HIT for user ${userId} recommendations`);
+      console.log(`Cache HIT for user ${userId} recommendations`);
       return cached as any[];
     }
 
-    console.log(`📊 Generating recommendations for user ${userId}...`);
+    console.log(`Generating recommendations for user ${userId}...`);
 
     try {
       // 1. Get user interests from user-service (explicit)
@@ -106,6 +110,12 @@ export class RecommendationService {
 
       // 5. Get videos user has already watched (to filter or deprioritize)
       const watchedVideoIds = await this.watchHistoryService.getWatchedVideoIds(userId.toString(), 100);
+      
+      // Recently watched videos (first N) should be COMPLETELY excluded
+      const recentlyWatchedSet = new Set(watchedVideoIds.slice(0, EXCLUDE_RECENTLY_WATCHED));
+      const olderWatchedSet = new Set(watchedVideoIds.slice(EXCLUDE_RECENTLY_WATCHED));
+      
+      console.log(`   Excluding ${recentlyWatchedSet.size} recently watched videos, deprioritizing ${olderWatchedSet.size} older watched`);
 
       // 6. Get all ready, non-hidden videos EXCLUDING user's own videos
       const allVideos = await this.videoRepository.find({
@@ -115,15 +125,19 @@ export class RecommendationService {
           userId: Not(userId.toString()), // Exclude user's own videos from recommendations
         },
         order: { createdAt: 'DESC' },
-        take: limit * 3, // Get more videos to score and filter
+        take: limit * 4, // Get more videos to score and filter (increased from 3x)
       });
 
       if (allVideos.length === 0) {
         return [];
       }
+      
+      // 6.5 Filter out recently watched videos completely
+      const filteredVideos = allVideos.filter(v => !recentlyWatchedSet.has(v.id));
+      console.log(`   Videos after filtering recently watched: ${filteredVideos.length}/${allVideos.length}`);
 
-      // 7. Score each video with new algorithm
-      const scoredVideos = await this.scoreVideosAdvanced(allVideos, allInterests, userId, watchedVideoIds);
+      // 7. Score each video with new algorithm (pass older watched set for penalizing)
+      const scoredVideos = await this.scoreVideosAdvanced(filteredVideos, allInterests, userId, Array.from(olderWatchedSet));
 
       // 8. Sort by score (highest first)
       scoredVideos.sort((a, b) => b.score - a.score);
@@ -134,14 +148,15 @@ export class RecommendationService {
       // 10. Add engagement counts
       const videosWithCounts = await this.addEngagementCounts(topVideos.map(sv => sv.video));
 
-      console.log(`✅ Generated ${videosWithCounts.length} recommendations for user ${userId}`);
+      console.log(`Generated ${videosWithCounts.length} recommendations for user ${userId}`);
+      console.log(`   Algorithm weights: Interest=${WEIGHTS.INTEREST_MATCH}, Engagement=${WEIGHTS.ENGAGEMENT}, Recency=${WEIGHTS.RECENCY}, Exploration=${WEIGHTS.EXPLORATION}, Freshness=${WEIGHTS.FRESHNESS}`);
 
       // Cache for 2 minutes
       await this.cacheManager.set(cacheKey, videosWithCounts, 120000);
 
       return videosWithCounts;
     } catch (error) {
-      console.error('❌ Error generating recommendations:', error);
+      console.error('Error generating recommendations:', error);
       // Fallback to chronological feed
       return this.getFallbackVideos(limit);
     }
@@ -158,7 +173,7 @@ export class RecommendationService {
       );
       return response.data.data || [];
     } catch (error) {
-      console.log(`⚠️ Could not fetch user interests: ${error.message}`);
+      console.log(`Could not fetch user interests: ${error.message}`);
       return [];
     }
   }
@@ -209,7 +224,7 @@ export class RecommendationService {
 
       return interests;
     } catch (error) {
-      console.log(`⚠️ Could not calculate implicit interests: ${error.message}`);
+      console.log(`Could not calculate implicit interests: ${error.message}`);
       return [];
     }
   }
@@ -226,7 +241,7 @@ export class RecommendationService {
         weight: wi.weight,
       }));
     } catch (error) {
-      console.log(`⚠️ Could not get watch time interests: ${error.message}`);
+      console.log(`Could not get watch time interests: ${error.message}`);
       return [];
     }
   }
@@ -454,7 +469,7 @@ export class RecommendationService {
       return cached as any[];
     }
 
-    console.log('📈 Fetching trending videos...');
+    console.log('Fetching trending videos...');
 
     // Get videos sorted by engagement (view count for now)
     const videos = await this.videoRepository.find({
@@ -501,6 +516,6 @@ export class RecommendationService {
     const cacheKey = `recommendations:${userId}:*`;
     // Simple invalidation - just delete the default key
     await this.cacheManager.del(`recommendations:${userId}:50`);
-    console.log(`🗑️ Invalidated recommendation cache for user ${userId}`);
+    console.log(`Invalidated recommendation cache for user ${userId}`);
   }
 }

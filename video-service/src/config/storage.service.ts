@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+﻿import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   S3Client,
@@ -44,14 +44,14 @@ export class StorageService implements OnModuleInit {
         },
       });
       this.isS3Enabled = true;
-      console.log('✅ AWS S3 Storage enabled');
+      console.log('AWS S3 Storage enabled');
       console.log(`   Bucket: ${this.bucket}`);
       console.log(`   Region: ${this.region}`);
       if (this.cloudfrontUrl) {
         console.log(`   CloudFront: ${this.cloudfrontUrl}`);
       }
     } else {
-      console.log('⚠️ AWS S3 not configured, using local file storage');
+      console.log('AWS S3 not configured, using local file storage');
     }
   }
 
@@ -99,7 +99,7 @@ export class StorageService implements OnModuleInit {
 
       upload.on('httpUploadProgress', (progress) => {
         const percent = ((progress.loaded || 0) / (progress.total || 1) * 100).toFixed(2);
-        console.log(`📤 Uploading ${s3Key}: ${percent}%`);
+        console.log(`Uploading ${s3Key}: ${percent}%`);
       });
 
       await upload.done();
@@ -117,7 +117,7 @@ export class StorageService implements OnModuleInit {
     }
 
     const url = this.getPublicUrl(s3Key);
-    console.log(`✅ Uploaded to S3: ${s3Key}`);
+    console.log(`Uploaded to S3: ${s3Key}`);
 
     return {
       key: s3Key,
@@ -175,7 +175,7 @@ export class StorageService implements OnModuleInit {
       }
     }
 
-    console.log(`✅ Uploaded directory: ${results.length} files to ${s3Prefix}`);
+    console.log(`Uploaded directory: ${results.length} files to ${s3Prefix}`);
     return results;
   }
 
@@ -193,7 +193,7 @@ export class StorageService implements OnModuleInit {
         Key: s3Key,
       }),
     );
-    console.log(`🗑️ Deleted from S3: ${s3Key}`);
+    console.log(`Deleted from S3: ${s3Key}`);
   }
 
   /**
@@ -218,7 +218,7 @@ export class StorageService implements OnModuleInit {
         }
       }
     }
-    console.log(`🗑️ Deleted directory from S3: ${s3Prefix}`);
+    console.log(`Deleted directory from S3: ${s3Prefix}`);
   }
 
   /**

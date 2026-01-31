@@ -63,10 +63,10 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
   private async connect(): Promise<void> {
     try {
       const health = await this.client.cluster.health({});
-      console.log('✅ Elasticsearch connected:', health.status);
+      console.log('Elasticsearch connected:', health.status);
       this.isConnected = true;
     } catch (error) {
-      console.warn('⚠️ Elasticsearch not available, falling back to SQL search:', error.message);
+      console.warn('[WARN] Elasticsearch not available, falling back to SQL search:', error.message);
       this.isConnected = false;
     }
   }
@@ -118,7 +118,7 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
             },
           },
         });
-        console.log('✅ Videos index created');
+        console.log('Videos index created');
       }
 
       // Create users index
@@ -163,10 +163,10 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
             },
           },
         });
-        console.log('✅ Users index created');
+        console.log('Users index created');
       }
     } catch (error) {
-      console.error('❌ Error creating indices:', error.message);
+      console.error('[ERROR] Error creating indices:', error.message);
     }
   }
 
@@ -179,10 +179,10 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
       const countResult = await this.client.count({ index: this.VIDEO_INDEX });
       const docCount = countResult.count;
       
-      console.log(`📊 Videos index has ${docCount} documents`);
+      console.log(`[STATS] Videos index has ${docCount} documents`);
       
       if (docCount === 0) {
-        console.log('📦 Auto-syncing videos from database to Elasticsearch...');
+        console.log('Auto-syncing videos from database to Elasticsearch...');
         
         // Get all ready videos from database
         const videos = await this.videoRepository.find({
@@ -190,7 +190,7 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
         });
 
         if (videos.length === 0) {
-          console.log('ℹ️ No ready videos in database to sync');
+          console.log('No ready videos in database to sync');
           return;
         }
 
@@ -211,10 +211,10 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
 
         // Bulk index
         await this.bulkIndexVideos(documents);
-        console.log(`✅ Auto-synced ${videos.length} videos to Elasticsearch`);
+        console.log(`[OK] Auto-synced ${videos.length} videos to Elasticsearch`);
       }
     } catch (error) {
-      console.error('❌ Error auto-syncing videos:', error.message);
+      console.error('[ERROR] Error auto-syncing videos:', error.message);
     }
   }
 
@@ -233,9 +233,9 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
         id: video.id,
         document: video,
       });
-      console.log(`📝 Indexed video: ${video.id}`);
+      console.log(`[INDEX] Indexed video: ${video.id}`);
     } catch (error) {
-      console.error('❌ Error indexing video:', error.message);
+      console.error('[ERROR] Error indexing video:', error.message);
     }
   }
 
@@ -249,9 +249,9 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
         id: user.id,
         document: user,
       });
-      console.log(`📝 Indexed user: ${user.id}`);
+      console.log(`[INDEX] Indexed user: ${user.id}`);
     } catch (error) {
-      console.error('❌ Error indexing user:', error.message);
+      console.error('[ERROR] Error indexing user:', error.message);
     }
   }
 
@@ -264,9 +264,9 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
         index: this.VIDEO_INDEX,
         id: videoId,
       });
-      console.log(`🗑️ Deleted video from index: ${videoId}`);
+      console.log(`[DELETE] Deleted video from index: ${videoId}`);
     } catch (error) {
-      console.error('❌ Error deleting video from index:', error.message);
+      console.error('[ERROR] Error deleting video from index:', error.message);
     }
   }
 
@@ -279,9 +279,9 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
         index: this.USER_INDEX,
         id: userId,
       });
-      console.log(`🗑️ Deleted user from index: ${userId}`);
+      console.log(`[DELETE] Deleted user from index: ${userId}`);
     } catch (error) {
-      console.error('❌ Error deleting user from index:', error.message);
+      console.error('[ERROR] Error deleting user from index:', error.message);
     }
   }
 
@@ -326,11 +326,11 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
       });
 
       const hits = result.hits.hits;
-      console.log(`🔍 Elasticsearch found ${hits.length} videos for query: "${query}"`);
+      console.log(`[SEARCH] Elasticsearch found ${hits.length} videos for query: "${query}"`);
 
       return hits.map((hit) => hit._source as VideoDocument);
     } catch (error) {
-      console.error('❌ Error searching videos in Elasticsearch:', error.message);
+      console.error('[ERROR] Error searching videos in Elasticsearch:', error.message);
       return [];
     }
   }
@@ -384,11 +384,11 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
       });
 
       const hits = result.hits.hits;
-      console.log(`🔍 Elasticsearch found ${hits.length} users for query: "${query}"`);
+      console.log(`[SEARCH] Elasticsearch found ${hits.length} users for query: "${query}"`);
 
       return hits.map((hit) => hit._source as UserDocument);
     } catch (error) {
-      console.error('❌ Error searching users in Elasticsearch:', error.message);
+      console.error('[ERROR] Error searching users in Elasticsearch:', error.message);
       return [];
     }
   }
@@ -406,12 +406,12 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
       const result = await this.client.bulk({ operations, refresh: true });
       
       if (result.errors) {
-        console.error('❌ Some videos failed to index');
+        console.error('[ERROR] Some videos failed to index');
       } else {
-        console.log(`✅ Bulk indexed ${videos.length} videos`);
+        console.log(`[OK] Bulk indexed ${videos.length} videos`);
       }
     } catch (error) {
-      console.error('❌ Error bulk indexing videos:', error.message);
+      console.error('[ERROR] Error bulk indexing videos:', error.message);
     }
   }
 
@@ -428,12 +428,12 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
       const result = await this.client.bulk({ operations, refresh: true });
       
       if (result.errors) {
-        console.error('❌ Some users failed to index');
+        console.error('[ERROR] Some users failed to index');
       } else {
-        console.log(`✅ Bulk indexed ${users.length} users`);
+        console.log(`[OK] Bulk indexed ${users.length} users`);
       }
     } catch (error) {
-      console.error('❌ Error bulk indexing users:', error.message);
+      console.error('[ERROR] Error bulk indexing users:', error.message);
     }
   }
 
@@ -450,7 +450,7 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       // Ignore if document doesn't exist
       if (error.meta?.statusCode !== 404) {
-        console.error('❌ Error updating video counts:', error.message);
+        console.error('[ERROR] Error updating video counts:', error.message);
       }
     }
   }

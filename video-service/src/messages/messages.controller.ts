@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Body, Param, Query, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+﻿import { Controller, Get, Post, Put, Body, Param, Query, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
@@ -7,13 +7,13 @@ import { MessagesService } from './messages.service';
 
 // Ensure upload directory exists at startup
 const chatImagesPath = join(process.cwd(), 'uploads', 'chat_images');
-console.log('📁 Chat images path:', chatImagesPath);
+console.log('Chat images path:', chatImagesPath);
 
 if (!existsSync(chatImagesPath)) {
   mkdirSync(chatImagesPath, { recursive: true });
-  console.log('✅ Created chat_images directory:', chatImagesPath);
+  console.log('Created chat_images directory:', chatImagesPath);
 } else {
-  console.log('✅ Chat images directory exists:', chatImagesPath);
+  console.log('Chat images directory exists:', chatImagesPath);
 }
 
 @Controller('messages')
@@ -22,12 +22,18 @@ export class MessagesController {
 
   @Post('send')
   async sendMessage(
-    @Body() body: { senderId: string; recipientId: string; content: string },
+    @Body() body: { 
+      senderId: string; 
+      recipientId: string; 
+      content: string;
+      replyTo?: { id: string; content: string; senderId: string };
+    },
   ) {
     const message = await this.messagesService.createMessage(
       body.senderId,
       body.recipientId,
       body.content,
+      body.replyTo,
     );
     return { success: true, data: message };
   }
@@ -144,11 +150,11 @@ export class MessagesController {
   @UseInterceptors(FileInterceptor('image', {
     storage: diskStorage({
       destination: (req, file, cb) => {
-        console.log('📂 Setting destination for file:', file.originalname);
+        console.log('Setting destination for file:', file.originalname);
         // Ensure directory exists
         if (!existsSync(chatImagesPath)) {
           mkdirSync(chatImagesPath, { recursive: true });
-          console.log('✅ Created directory:', chatImagesPath);
+          console.log('Created directory:', chatImagesPath);
         }
         cb(null, chatImagesPath);
       },
@@ -158,18 +164,18 @@ export class MessagesController {
         const randomStr = Math.random().toString(36).substring(2, 15);
         const ext = extname(file.originalname) || '.jpg';
         const uniqueName = `chat_${timestamp}_${randomStr}${ext}`;
-        console.log('📝 Generated filename:', uniqueName);
+        console.log('Generated filename:', uniqueName);
         cb(null, uniqueName);
       },
     }),
     fileFilter: (req, file, cb) => {
-      console.log('🔍 Checking file:', file.originalname, 'mimetype:', file.mimetype);
+      console.log('Checking file:', file.originalname, 'mimetype:', file.mimetype);
       // Accept common image types
       const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
       if (allowedMimes.includes(file.mimetype)) {
         cb(null, true);
       } else {
-        console.log('❌ Rejected file type:', file.mimetype);
+        console.log('Rejected file type:', file.mimetype);
         cb(new BadRequestException(`Invalid file type: ${file.mimetype}. Only images are allowed.`), false);
       }
     },
@@ -178,14 +184,14 @@ export class MessagesController {
     },
   }))
   async uploadImage(@UploadedFile() file: Express.Multer.File) {
-    console.log('📸 Upload image endpoint called');
+    console.log('Upload image endpoint called');
     
     if (!file) {
-      console.log('❌ No file received');
+      console.log('No file received');
       return { success: false, message: 'No file uploaded' };
     }
 
-    console.log('✅ File received:', {
+    console.log('File received:', {
       originalname: file.originalname,
       filename: file.filename,
       size: file.size,
@@ -194,12 +200,40 @@ export class MessagesController {
     });
 
     const imageUrl = `/uploads/chat_images/${file.filename}`;
-    console.log('📸 Chat image uploaded successfully:', imageUrl);
+    console.log('Chat image uploaded successfully:', imageUrl);
 
     return {
       success: true,
       imageUrl,
       filename: file.filename,
     };
+  }
+
+  // ========== MESSAGE DELETION ==========
+
+  @Post(':messageId/delete-for-me')
+  async deleteForMe(
+    @Param('messageId') messageId: string,
+    @Query('userId') userId: string,
+  ) {
+    const result = await this.messagesService.deleteForMe(messageId, userId);
+    return result;
+  }
+
+  @Post(':messageId/delete-for-everyone')
+  async deleteForEveryone(
+    @Param('messageId') messageId: string,
+    @Query('userId') userId: string,
+  ) {
+    const result = await this.messagesService.deleteForEveryone(messageId, userId);
+    return result;
+  }
+
+  @Post('translate')
+  async translateMessage(
+    @Body() body: { text: string; targetLanguage: string },
+  ) {
+    const result = await this.messagesService.translateMessage(body.text, body.targetLanguage);
+    return result;
   }
 }

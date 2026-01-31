@@ -10,7 +10,7 @@ async function bootstrap() {
   
   // Add global request logger
   app.use((req, res, next) => {
-    console.log(`📨 [${new Date().toISOString()}] ${req.method} ${req.url}`);
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
     console.log(`   Headers:`, req.headers);
     next();
   });

@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+﻿import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as admin from 'firebase-admin';
 import * as path from 'path';
@@ -16,7 +16,7 @@ export class FirebaseAdminService {
             if (serviceAccountPath) {
                 // Resolve absolute path from project root
                 const absolutePath = path.resolve(process.cwd(), serviceAccountPath);
-                console.log(`📂 Looking for Firebase service account at: ${absolutePath}`);
+                console.log(`Looking for Firebase service account at: ${absolutePath}`);
 
                 if (fs.existsSync(absolutePath)) {
                     // Read and parse the JSON file
@@ -24,9 +24,9 @@ export class FirebaseAdminService {
                     this.firebaseApp = admin.initializeApp({
                         credential: admin.credential.cert(serviceAccount),
                     });
-                    console.log('🔥 Firebase Admin initialized with service account');
+                    console.log('Firebase Admin initialized with service account');
                 } else {
-                    console.warn(`⚠️ Firebase service account file not found at: ${absolutePath}`);
+                    console.warn(`Firebase service account file not found at: ${absolutePath}`);
                 }
             } else {
                 // Initialize with environment variables
@@ -42,9 +42,9 @@ export class FirebaseAdminService {
                             privateKey,
                         }),
                     });
-                    console.log('🔥 Firebase Admin initialized with environment variables');
+                    console.log('Firebase Admin initialized with environment variables');
                 } else {
-                    console.warn('⚠️ Firebase Admin not configured - phone auth will not work');
+                    console.warn('Firebase Admin not configured - phone auth will not work');
                 }
             }
         } else {
@@ -66,7 +66,7 @@ export class FirebaseAdminService {
                 phone: decodedToken.phone_number,
             };
         } catch (error) {
-            console.error('❌ Firebase token verification failed:', error);
+            console.error('Firebase token verification failed:', error);
             throw new UnauthorizedException('Invalid Firebase token');
         }
     }

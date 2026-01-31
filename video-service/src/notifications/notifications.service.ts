@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+﻿import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Notification, NotificationType } from '../entities/notification.entity';
@@ -109,7 +109,7 @@ export class NotificationsService {
           }
       }
     } catch (error) {
-      console.error('❌ Error sending push notification:', error);
+      console.error('[ERROR] Error sending push notification:', error);
     }
   }
 

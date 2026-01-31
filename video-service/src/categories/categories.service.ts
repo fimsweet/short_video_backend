@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+﻿import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Category } from '../entities/category.entity';
@@ -41,14 +41,14 @@ export class CategoriesService implements OnModuleInit {
     const existingCategories = await this.categoryRepository.find();
     
     if (existingCategories.length === 0) {
-      console.log('🏷️ Seeding default categories...');
+      console.log('Seeding default categories...');
       
       for (const categoryData of DEFAULT_CATEGORIES) {
         const category = this.categoryRepository.create(categoryData);
         await this.categoryRepository.save(category);
       }
       
-      console.log(`✅ Created ${DEFAULT_CATEGORIES.length} default categories`);
+      console.log(`Created ${DEFAULT_CATEGORIES.length} default categories`);
     }
   }
 
@@ -89,7 +89,7 @@ export class CategoriesService implements OnModuleInit {
       videoCategories.push(saved);
     }
 
-    console.log(`🏷️ Assigned ${categoryIds.length} categories to video ${videoId}`);
+    console.log(`Assigned ${categoryIds.length} categories to video ${videoId}`);
     return videoCategories;
   }
 

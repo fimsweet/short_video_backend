@@ -126,8 +126,22 @@ services:
       - RABBITMQ_QUEUE=${RABBITMQ_QUEUE}
       - USE_SQS=${USE_SQS}
       - AWS_SQS_QUEUE_URL=${AWS_SQS_QUEUE_URL}
-      # Worker
-      - WORKER_CONCURRENCY=3
+      # ============================================
+      # ⚠️ WORKER CONCURRENCY - CRITICAL FOR SCALING
+      # ============================================
+      # FFmpeg is CPU-bound. Do NOT increase this!
+      # - Setting WORKER_CONCURRENCY=1 means 1 video/container
+      # - Scale by increasing replicas, not concurrency
+      # - Multiple FFmpeg processes = context switching overhead
+      # ============================================
+      - WORKER_CONCURRENCY=1
+      # ============================================
+      # 🐳 SHARED VOLUME PATH
+      # ============================================
+      # For S3-first workflow: Worker downloads from S3 directly
+      # For shared volume: Set to the mount point path
+      # ============================================
+      - UPLOAD_ROOT_PATH=/app/uploads
       # AWS S3
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}

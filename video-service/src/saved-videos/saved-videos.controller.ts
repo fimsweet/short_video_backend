@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Body } from '@nestjs/common';
+﻿import { Controller, Post, Get, Param, Body } from '@nestjs/common';
 import { SavedVideosService } from './saved-videos.service';
 
 @Controller('saved-videos')
@@ -12,9 +12,9 @@ export class SavedVideosController {
 
   @Get('check/:videoId/:userId')
   async checkSaved(@Param('videoId') videoId: string, @Param('userId') userId: string) {
-    console.log(`🔍 [API] Check saved: videoId=${videoId}, userId=${userId}`);
+    console.log(`[CHECK] [API] Check saved: videoId=${videoId}, userId=${userId}`);
     const saved = await this.savedVideosService.isSavedByUser(videoId, userId);
-    console.log(`✅ [API] Saved status for video ${videoId} by user ${userId}: ${saved}`);
+    console.log(`[OK] [API] Saved status for video ${videoId} by user ${userId}: ${saved}`);
     return { saved };
   }
 

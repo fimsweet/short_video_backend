@@ -37,7 +37,7 @@ export class UserInterestsService {
       );
       return response.data.data || [];
     } catch (error) {
-      console.error('❌ Error fetching categories:', error.message);
+      console.error('Error fetching categories:', error.message);
       return [];
     }
   }
@@ -95,7 +95,7 @@ export class UserInterestsService {
       }
     }
 
-    console.log(`✅ Set ${interests.length} interests for user ${userId}`);
+    console.log(`Set ${interests.length} interests for user ${userId}`);
     return interests;
   }
 

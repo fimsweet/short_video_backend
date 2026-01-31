@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany, Index } from 'typeorm';
 import { Like } from './like.entity';
 import { Comment } from './comment.entity';
 
@@ -15,7 +15,20 @@ export enum VideoVisibility {
   PRIVATE = 'private',
 }
 
+// ============================================
+// 📊 DATABASE INDEXES FOR PERFORMANCE
+// ============================================
+// These indexes optimize common queries:
+// - Feed: Get READY videos sorted by createdAt
+// - Profile: Get videos by userId
+// - Trending: Get videos by viewCount
+// ============================================
 @Entity('videos')
+@Index(['userId']) // Query videos by user (profile page)
+@Index(['status']) // Filter by processing status
+@Index(['status', 'createdAt']) // Feed query: READY videos sorted by date
+@Index(['status', 'visibility']) // Public feed: READY + PUBLIC videos
+@Index(['status', 'viewCount']) // Trending: READY videos sorted by views
 export class Video {
   @PrimaryGeneratedColumn('uuid')
   id: string;

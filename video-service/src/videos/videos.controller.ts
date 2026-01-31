@@ -5,6 +5,7 @@ import {
   Put,
   UseInterceptors,
   UploadedFile,
+  UploadedFiles,
   Body,
   Param,
   Query,
@@ -12,10 +13,10 @@ import {
   HttpStatus,
   HttpCode,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FileFieldsInterceptor } from '@nestjs/platform-express';
 import { VideosService } from './videos.service';
 import { UploadVideoDto } from './dto/upload-video.dto';
-import { multerConfig } from '../config/multer.config';
+import { multerConfig, thumbnailMulterConfig } from '../config/multer.config';
 import { ChunkedUploadService } from './chunked-upload.service';
 import { InitChunkedUploadDto, UploadChunkDto, CompleteChunkedUploadDto } from './dto/chunk-upload.dto';
 
@@ -72,6 +73,11 @@ export class VideosController {
   @Get('feed/following/:userId')
   async getFollowingFeed(@Param('userId') userId: string) {
     return this.videosService.getFollowingVideos(parseInt(userId, 10), 50);
+  }
+
+  @Get('feed/friends/:userId')
+  async getFriendsFeed(@Param('userId') userId: string) {
+    return this.videosService.getFriendsVideos(parseInt(userId, 10), 50);
   }
 
   // ⚠️ IMPORTANT: :id route must be LAST to avoid catching other routes
@@ -155,6 +161,57 @@ export class VideosController {
         title: video.title,
         description: video.description,
       },
+    };
+  }
+
+  @Put(':id/thumbnail')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('thumbnail', thumbnailMulterConfig))
+  async updateThumbnail(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('userId') userId: string,
+  ) {
+    if (!file) {
+      throw new BadRequestException('No thumbnail file uploaded');
+    }
+
+    const video = await this.videosService.updateThumbnail(id, userId, file);
+    return {
+      success: true,
+      thumbnailUrl: video.thumbnailUrl,
+      message: 'Thumbnail updated successfully',
+    };
+  }
+
+  @Post('upload-with-thumbnail')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @UseInterceptors(FileFieldsInterceptor([
+    { name: 'video', maxCount: 1 },
+    { name: 'thumbnail', maxCount: 1 },
+  ], multerConfig))
+  async uploadVideoWithThumbnail(
+    @UploadedFiles() files: { video?: Express.Multer.File[], thumbnail?: Express.Multer.File[] },
+    @Body() uploadVideoDto: UploadVideoDto,
+  ) {
+    if (!files.video || files.video.length === 0) {
+      throw new BadRequestException('No video file uploaded');
+    }
+
+    const videoFile = files.video[0];
+    const thumbnailFile = files.thumbnail?.[0];
+
+    const video = await this.videosService.uploadVideoWithThumbnail(
+      uploadVideoDto,
+      videoFile,
+      thumbnailFile,
+    );
+
+    return {
+      message: 'Video received and is being processed',
+      videoId: video.id,
+      status: video.status,
+      hasCustomThumbnail: !!thumbnailFile,
     };
   }
 

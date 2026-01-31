@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+﻿import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Share } from '../entities/share.entity';
@@ -11,7 +11,7 @@ export class SharesService {
   ) {}
 
   async createShare(videoId: string, sharerId: string, recipientId: string): Promise<{ shareCount: number }> {
-    console.log(`📤 Creating share: videoId=${videoId}, sharerId=${sharerId}, recipientId=${recipientId}`);
+    console.log(`[SHARE] Creating share: videoId=${videoId}, sharerId=${sharerId}, recipientId=${recipientId}`);
     
     // Create new share record
     await this.shareRepository.save({
@@ -21,7 +21,7 @@ export class SharesService {
     });
 
     const shareCount = await this.getShareCount(videoId);
-    console.log(`✅ Share created, total count: ${shareCount}`);
+    console.log(`[OK] Share created, total count: ${shareCount}`);
     
     return { shareCount };
   }
@@ -39,6 +39,6 @@ export class SharesService {
 
   async deleteAllSharesForVideo(videoId: string): Promise<void> {
     await this.shareRepository.delete({ videoId });
-    console.log(`🗑️ Deleted all shares for video ${videoId}`);
+    console.log(`[DELETE] Deleted all shares for video ${videoId}`);
   }
 }

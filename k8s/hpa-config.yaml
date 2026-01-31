@@ -1,0 +1,199 @@
+# ============================================
+# KUBERNETES HORIZONTAL POD AUTOSCALER (HPA)
+# ============================================
+# Deploy metrics-server first:
+# kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+# ============================================
+
+---
+# ============================================
+# USER SERVICE HPA
+# ============================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: user-service-hpa
+  namespace: short-video-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: user-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Wait 5 min before scale down
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0  # Scale up immediately
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 4
+          periodSeconds: 15
+      selectPolicy: Max
+
+---
+# ============================================
+# VIDEO SERVICE HPA
+# ============================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: video-service-hpa
+  namespace: short-video-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: video-service
+  minReplicas: 2
+  maxReplicas: 15
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 65  # Lower threshold - video API is CPU intensive
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 75
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 30
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 5
+          periodSeconds: 15
+      selectPolicy: Max
+
+---
+# ============================================
+# VIDEO WORKER SERVICE HPA (Most Critical)
+# ============================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: video-worker-hpa
+  namespace: short-video-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: video-worker
+  minReplicas: 2      # Always have 2 workers minimum
+  maxReplicas: 20     # Can scale to 20 workers for heavy load
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60  # Scale at 60% CPU (video encoding is CPU heavy)
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 600  # Wait 10 min before scale down (finish current jobs)
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 120
+    scaleUp:
+      stabilizationWindowSeconds: 0  # Scale up immediately when needed
+      policies:
+        - type: Percent
+          value: 200  # Can double workers quickly
+          periodSeconds: 30
+        - type: Pods
+          value: 6    # Add up to 6 workers at a time
+          periodSeconds: 30
+      selectPolicy: Max
+
+---
+# ============================================
+# DEPLOYMENTS (Reference)
+# ============================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: video-worker
+  namespace: short-video-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: video-worker
+  template:
+    metadata:
+      labels:
+        app: video-worker
+    spec:
+      containers:
+        - name: video-worker
+          image: your-registry/video-worker:latest
+          resources:
+            requests:
+              cpu: "500m"      # Request 0.5 CPU
+              memory: "1Gi"    # Request 1GB RAM
+            limits:
+              cpu: "2"         # Max 2 CPUs per worker
+              memory: "4Gi"    # Max 4GB RAM
+          env:
+            - name: WORKER_CONCURRENCY
+              value: "3"       # Each worker processes 3 videos
+            - name: NODE_ENV
+              value: "production"
+            # ... other env vars from secrets
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "ps aux | grep node || exit 1"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "ps aux | grep node || exit 1"
+            initialDelaySeconds: 10
+            periodSeconds: 10

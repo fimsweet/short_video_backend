@@ -1,4 +1,4 @@
-import * as nodemailer from 'nodemailer';
+﻿import * as nodemailer from 'nodemailer';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
@@ -20,15 +20,15 @@ export class EmailService {
         },
       });
       this.isConfigured = true;
-      console.log('✅ Email service configured successfully');
+      console.log('Email service configured successfully');
     } else {
-      console.log('⚠️ Email service not configured - EMAIL_USER or EMAIL_APP_PASSWORD missing');
+      console.log('Email service not configured - EMAIL_USER or EMAIL_APP_PASSWORD missing');
     }
   }
 
   async sendOtpEmail(to: string, otp: string): Promise<boolean> {
     if (!this.isConfigured) {
-      console.log(`📧 [MOCK] Would send OTP ${otp} to ${to}`);
+      console.log(`[MOCK] Would send OTP ${otp} to ${to}`);
       return true; // Return true for development/testing
     }
 
@@ -42,10 +42,10 @@ export class EmailService {
 
     try {
       await this.transporter.sendMail(mailOptions);
-      console.log(`✅ OTP email sent to ${to}`);
+      console.log(`OTP email sent to ${to}`);
       return true;
     } catch (error) {
-      console.error('❌ Failed to send OTP email:', error);
+      console.error('Failed to send OTP email:', error);
       return false;
     }
   }
@@ -125,7 +125,7 @@ export class EmailService {
 
   async sendWelcomeEmail(to: string, username: string): Promise<boolean> {
     if (!this.isConfigured) {
-      console.log(`📧 [MOCK] Would send welcome email to ${to}`);
+      console.log(`[MOCK] Would send welcome email to ${to}`);
       return true;
     }
 
@@ -139,10 +139,10 @@ export class EmailService {
 
     try {
       await this.transporter.sendMail(mailOptions);
-      console.log(`✅ Welcome email sent to ${to}`);
+      console.log(`Welcome email sent to ${to}`);
       return true;
     } catch (error) {
-      console.error('❌ Failed to send welcome email:', error);
+      console.error('Failed to send welcome email:', error);
       return false;
     }
   }
