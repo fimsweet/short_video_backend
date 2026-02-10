@@ -47,6 +47,13 @@ export class Conversation {
   @Column({ nullable: true })
   nicknameBy2: string; // nickname for participant1, set by participant2
 
+  // Auto-translate settings for each participant
+  @Column({ default: false })
+  autoTranslateBy1: boolean;
+
+  @Column({ default: false })
+  autoTranslateBy2: boolean;
+
   @CreateDateColumn()
   createdAt: Date;
 

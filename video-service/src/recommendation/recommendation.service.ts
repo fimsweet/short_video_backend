@@ -33,12 +33,14 @@ const WEIGHTS = {
   INTEREST_MATCH: 0.30, // From user interests + watch time
   ENGAGEMENT: 0.25,      // Likes, views ratio
   RECENCY: 0.20,         // Newer videos preferred
-  EXPLORATION: 0.15,     // Random factor for discovery
-  FRESHNESS: 0.10,       // Bonus for videos user hasn't seen (increased from 0.05)
+  EXPLORATION: 0.15,     // Random factor for discovery of new categories
+  FRESHNESS: 0.10,       // Bonus for videos user hasn't seen
 };
 
+// Discovery ratio: ensure ~20% of feed is from unexplored categories
+const DISCOVERY_RATIO = 0.20;
+
 // How many recently watched videos to completely exclude (not just penalize)
-// Increased to 50 because short-video users typically watch 50-100 videos per session
 const EXCLUDE_RECENTLY_WATCHED = 50;
 
 @Injectable()
@@ -72,7 +74,7 @@ export class RecommendationService {
    * 
    * Algorithm: Hybrid (Content-Based + Watch Time + Engagement + Recency + Exploration)
    * 
-   * Score = (Interest Match × 0.35) + (Engagement × 0.25) + (Recency × 0.20) + (Exploration × 0.15) + (Freshness × 0.05)
+   * Score = (Interest Match ï¿½ 0.35) + (Engagement ï¿½ 0.25) + (Recency ï¿½ 0.20) + (Exploration ï¿½ 0.15) + (Freshness ï¿½ 0.05)
    * 
    * Interest Match includes:
    * - Explicit interests (user selected)
@@ -136,23 +138,31 @@ export class RecommendationService {
       const filteredVideos = allVideos.filter(v => !recentlyWatchedSet.has(v.id));
       console.log(`   Videos after filtering recently watched: ${filteredVideos.length}/${allVideos.length}`);
 
-      // 7. Score each video with new algorithm (pass older watched set for penalizing)
+      // 7. Get all categories user has interacted with (for discovery detection)
+      const exploredCategoryIds = new Set(allInterests.map(i => i.categoryId));
+
+      // 8. Score each video with new algorithm (pass older watched set for penalizing)
       const scoredVideos = await this.scoreVideosAdvanced(filteredVideos, allInterests, userId, Array.from(olderWatchedSet));
 
-      // 8. Sort by score (highest first)
+      // 9. Sort by score (highest first)
       scoredVideos.sort((a, b) => b.score - a.score);
 
-      // 9. Take top N videos
-      const topVideos = scoredVideos.slice(0, limit);
+      // 10. Apply discovery mixing â€” ensure ~20% are from unexplored categories
+      const topVideos = this.applyDiscoveryMixing(scoredVideos, exploredCategoryIds, limit);
 
-      // 10. Add engagement counts
-      const videosWithCounts = await this.addEngagementCounts(topVideos.map(sv => sv.video));
+      // 11. Apply diversity shuffle â€” avoid too many same-category videos in a row
+      const diverseVideos = this.applyDiversityShuffle(topVideos);
+
+      // 12. Add engagement counts
+      const videosWithCounts = await this.addEngagementCounts(diverseVideos.map(sv => sv.video));
 
       console.log(`Generated ${videosWithCounts.length} recommendations for user ${userId}`);
       console.log(`   Algorithm weights: Interest=${WEIGHTS.INTEREST_MATCH}, Engagement=${WEIGHTS.ENGAGEMENT}, Recency=${WEIGHTS.RECENCY}, Exploration=${WEIGHTS.EXPLORATION}, Freshness=${WEIGHTS.FRESHNESS}`);
+      console.log(`   Discovery ratio target: ${DISCOVERY_RATIO * 100}%`);
 
-      // Cache for 2 minutes
-      await this.cacheManager.set(cacheKey, videosWithCounts, 120000);
+      // Cache for 90 seconds (shorter for active users to get fresh content)
+      const cacheTTL = watchedVideoIds.length > 20 ? 60000 : 120000;
+      await this.cacheManager.set(cacheKey, videosWithCounts, cacheTTL);
 
       return videosWithCounts;
     } catch (error) {
@@ -366,11 +376,14 @@ export class RecommendationService {
       const recencyScore = Math.max(0, 1 - (ageInDays / 7)); // Linear decay over 7 days
       score += recencyScore * WEIGHTS.RECENCY;
 
-      // 4. Exploration/Random Score (0.15) - Increased for better discovery
-      // Also gives slight boost to categories user hasn't seen much
-      let explorationScore = Math.random();
+      // 4. Exploration/Random Score (0.15) - Discovery of new categories
+      // Stronger boost for videos from unexplored categories
+      let explorationScore = Math.random() * 0.5; // Base random factor (0-0.5)
       if (videoCategories.length > 0 && matchedCategories.length === 0) {
-        // Boost videos from categories user hasn't explored
+        // Strong boost for videos from completely unexplored categories
+        explorationScore = Math.min(explorationScore + 0.6, 1);
+      } else if (videoCategories.length > 0 && matchedCategories.length < videoCategories.length) {
+        // Moderate boost for videos that have at least one unexplored category
         explorationScore = Math.min(explorationScore + 0.3, 1);
       }
       score += explorationScore * WEIGHTS.EXPLORATION;
@@ -387,6 +400,91 @@ export class RecommendationService {
     }
 
     return scoredVideos;
+  }
+
+  /**
+   * Ensure a percentage of the feed comes from unexplored categories
+   * This prevents filter bubbles and helps users discover new content
+   */
+  private applyDiscoveryMixing(
+    scoredVideos: ScoredVideo[],
+    exploredCategoryIds: Set<number>,
+    limit: number,
+  ): ScoredVideo[] {
+    const discoverySlots = Math.ceil(limit * DISCOVERY_RATIO);
+    const mainSlots = limit - discoverySlots;
+
+    // Separate videos into "familiar" and "discovery" pools
+    const familiarVideos: ScoredVideo[] = [];
+    const discoveryVideos: ScoredVideo[] = [];
+
+    for (const sv of scoredVideos) {
+      // A video is "discovery" if it has NO matched categories with user interests
+      if (sv.matchedCategories.length === 0) {
+        discoveryVideos.push(sv);
+      } else {
+        familiarVideos.push(sv);
+      }
+    }
+
+    console.log(`   Discovery mixing: ${familiarVideos.length} familiar, ${discoveryVideos.length} discovery candidates`);
+
+    // Take from each pool
+    const selectedFamiliar = familiarVideos.slice(0, mainSlots);
+    const selectedDiscovery = discoveryVideos.slice(0, discoverySlots);
+
+    // If we don't have enough discovery videos, fill with familiar ones
+    const result = [...selectedFamiliar, ...selectedDiscovery];
+    if (result.length < limit) {
+      const remaining = scoredVideos.filter(
+        sv => !result.includes(sv),
+      ).slice(0, limit - result.length);
+      result.push(...remaining);
+    }
+
+    return result.slice(0, limit);
+  }
+
+  /**
+   * Shuffle to avoid consecutive videos from the same category
+   * Maintains overall ranking quality while improving diversity
+   */
+  private applyDiversityShuffle(scoredVideos: ScoredVideo[]): ScoredVideo[] {
+    if (scoredVideos.length <= 2) return scoredVideos;
+
+    const result: ScoredVideo[] = [scoredVideos[0]]; // Keep #1 as-is
+    const remaining = scoredVideos.slice(1);
+
+    while (remaining.length > 0) {
+      const lastVideo = result[result.length - 1];
+      const lastCategories = new Set(lastVideo.matchedCategories);
+
+      // Try to find a video with different categories
+      let bestIdx = 0;
+      let found = false;
+
+      // Look within the next 5 candidates for a different category
+      const lookAhead = Math.min(5, remaining.length);
+      for (let i = 0; i < lookAhead; i++) {
+        const candidateCategories = remaining[i].matchedCategories;
+        const hasOverlap = candidateCategories.some(c => lastCategories.has(c));
+        if (!hasOverlap) {
+          bestIdx = i;
+          found = true;
+          break;
+        }
+      }
+
+      // If no different category found in look-ahead window, just take the next best
+      if (!found) {
+        bestIdx = 0;
+      }
+
+      result.push(remaining[bestIdx]);
+      remaining.splice(bestIdx, 1);
+    }
+
+    return result;
   }
 
   /**

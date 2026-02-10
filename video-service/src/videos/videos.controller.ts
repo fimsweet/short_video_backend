@@ -80,6 +80,26 @@ export class VideosController {
     return this.videosService.getFriendsVideos(parseInt(userId, 10), 50);
   }
 
+  @Get('feed/following/:userId/new-count')
+  async getFollowingNewCount(
+    @Param('userId') userId: string,
+    @Query('since') since: string,
+  ) {
+    const sinceDate = since ? new Date(since) : new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const count = await this.videosService.getFollowingNewVideoCount(parseInt(userId, 10), sinceDate);
+    return { success: true, newCount: count };
+  }
+
+  @Get('feed/friends/:userId/new-count')
+  async getFriendsNewCount(
+    @Param('userId') userId: string,
+    @Query('since') since: string,
+  ) {
+    const sinceDate = since ? new Date(since) : new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const count = await this.videosService.getFriendsNewVideoCount(parseInt(userId, 10), sinceDate);
+    return { success: true, newCount: count };
+  }
+
   // ⚠️ IMPORTANT: :id route must be LAST to avoid catching other routes
   @Get(':id')
   async getVideo(@Param('id') id: string) {

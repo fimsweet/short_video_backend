@@ -10,6 +10,49 @@ export class HealthController {
     private cacheManager: Cache,
   ) {}
 
+  /**
+   * Basic health check - used by Docker/K8s
+   */
+  @Get()
+  check() {
+    return {
+      status: 'ok',
+      service: 'video-service',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Liveness probe - K8s uses to check if pod is alive
+   */
+  @Get('live')
+  liveness() {
+    return { status: 'ok' };
+  }
+
+  /**
+   * Readiness probe - K8s uses to check if pod can accept traffic
+   */
+  @Get('ready')
+  async readiness() {
+    const redisOk = await this.checkRedisHealth();
+    if (!redisOk) {
+      return { status: 'not ready', reason: 'Redis unavailable' };
+    }
+    return { status: 'ok' };
+  }
+
+  private async checkRedisHealth(): Promise<boolean> {
+    try {
+      const testKey = 'health_check_ping';
+      await this.cacheManager.set(testKey, 'pong', 5000);
+      const value = await this.cacheManager.get(testKey);
+      return value === 'pong';
+    } catch {
+      return false;
+    }
+  }
+
   @Get('redis')
   async checkRedis() {
     try {
@@ -50,6 +93,9 @@ export class HealthController {
     const redisStatus = await this.checkRedis();
     
     return {
+      status: 'ok',
+      service: 'video-service',
+      timestamp: new Date().toISOString(),
       services: {
         redis: redisStatus.success ? '✅ Running' : '❌ Down',
       },

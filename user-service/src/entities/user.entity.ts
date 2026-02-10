@@ -48,7 +48,10 @@ export class User {
   twoFactorEnabled: boolean;
 
   @Column({ type: 'simple-array', nullable: true })
-  twoFactorMethods: string[] | null; // ['email', 'sms', 'app']
+  twoFactorMethods: string[] | null; // ['email', 'sms', 'totp']
+
+  @Column({ nullable: true, type: 'varchar', length: 255 })
+  totpSecret: string | null; // Encrypted TOTP secret for authenticator apps
 
   // Online Status
   @Column({ type: 'datetime', nullable: true })

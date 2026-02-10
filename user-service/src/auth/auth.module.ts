@@ -10,6 +10,7 @@ import { OtpModule } from '../otp/otp.module';
 import { FirebaseAdminService } from './firebase-admin.service';
 import { EmailService } from '../config/email.service';
 import { SessionsModule } from '../sessions/sessions.module';
+import { TotpService } from './totp.service';
 
 @Module({
   imports: [
@@ -27,7 +28,7 @@ import { SessionsModule } from '../sessions/sessions.module';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, FirebaseAdminService, EmailService],
-  exports: [FirebaseAdminService],
+  providers: [AuthService, JwtStrategy, FirebaseAdminService, EmailService, TotpService],
+  exports: [FirebaseAdminService, TotpService],
 })
 export class AuthModule { }

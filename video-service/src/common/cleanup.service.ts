@@ -12,7 +12,9 @@ import * as path from 'path';
  * Các thư mục được dọn dẹp:
  * - ./uploads/temp: File chunk tạm khi upload
  * - ./uploads/raw_videos: Video gốc chờ xử lý (nếu worker chưa kịp xóa)
- * - ./uploads/thumbnails: Thumbnail tạm
+ * - ./uploads/chunks: Chunk files tạm
+ * 
+ * QUAN TRỌNG: KHÔNG xóa ./uploads/thumbnails vì chứa custom thumbnails người dùng upload
  * 
  * Schedule: Chạy mỗi ngày lúc 3:00 AM
  * Rule: Xóa file cũ hơn 24 giờ
@@ -22,11 +24,10 @@ import * as path from 'path';
 export class CleanupService implements OnModuleInit {
   private readonly logger = new Logger(CleanupService.name);
   
-  // Các thư mục cần dọn dẹp
+  // Các thư mục cần dọn dẹp (KHÔNG bao gồm thumbnails - chứa custom thumbnails)
   private readonly tempDirs = [
     './uploads/temp',
     './uploads/raw_videos', 
-    './uploads/thumbnails',
     './uploads/chunks',
   ];
 

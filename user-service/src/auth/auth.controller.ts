@@ -212,6 +212,25 @@ export class AuthController {
     );
   }
 
+  // ============= TOTP SETUP (Google Authenticator) =============
+
+  // Generate TOTP secret and QR code for setup
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/totp/setup')
+  async setupTotp(@Request() req) {
+    return this.authService.setupTotp(req.user.userId);
+  }
+
+  // Verify initial TOTP token and save secret
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/totp/verify-setup')
+  async verifyTotpSetup(
+    @Request() req,
+    @Body() dto: { token: string; secret: string },
+  ) {
+    return this.authService.verifyTotpSetup(req.user.userId, dto.token, dto.secret);
+  }
+
   // ============= FORGOT PASSWORD WITH PHONE =============
 
   // Check if phone exists for password reset

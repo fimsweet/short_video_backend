@@ -107,11 +107,12 @@ export class VideosService {
         console.log('Categories assigned:', uploadVideoDto.categoryIds);
       }
 
-      // 3. G?i message v�o RabbitMQ d? worker x? l�
+      // 3. Gửi message vào RabbitMQ để worker xử lý
       await this.sendToQueue({
         videoId: savedVideo.id,
         filePath: file.path,
         fileName: file.filename,
+        thumbnailTimestamp: uploadVideoDto.thumbnailTimestamp,
       });
       console.log('Job sent to RabbitMQ queue');
 
@@ -153,7 +154,7 @@ export class VideosService {
     let channel: amqp.Channel;
 
     try {
-      // K?t n?i t?i RabbitMQ
+      // Kết nối tới RabbitMQ
       connection = await amqp.connect(this.rabbitMQUrl);
       channel = await connection.createChannel();
 
@@ -174,7 +175,7 @@ export class VideosService {
         }
       });
 
-      // G?i message
+      // Gửi message
       channel.sendToQueue(
         this.queueName,
         Buffer.from(JSON.stringify(message)),
@@ -491,16 +492,21 @@ export class VideosService {
         return [];
       }
 
-      // Get videos from followed users (excluding friends)
+      // Get recent videos from followed users (excluding friends)
+      // Only show videos from the last 7 days to keep feed fresh
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
       const videos = await this.videoRepository
         .createQueryBuilder('video')
         .where('video.status = :status', { status: VideoStatus.READY })
         .andWhere('video.userId IN (:...userIds)', { userIds: followingOnlyIds.map(id => id.toString()) })
+        .andWhere('video.createdAt > :since', { since: sevenDaysAgo })
         .orderBy('video.createdAt', 'DESC')
         .take(limit)
         .getMany();
 
-      console.log(`[OK] Found ${videos.length} videos from following users (excluding friends)`);
+      console.log(`[OK] Found ${videos.length} recent videos from following users (last 7 days, excluding friends)`);
 
       // Add like and comment counts
       const videosWithCounts = await Promise.all(
@@ -545,16 +551,21 @@ export class VideosService {
         return [];
       }
 
-      // Get videos from mutual friends only
+      // Get recent videos from mutual friends only
+      // Only show videos from the last 7 days to keep feed fresh
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
       const videos = await this.videoRepository
         .createQueryBuilder('video')
         .where('video.status = :status', { status: VideoStatus.READY })
         .andWhere('video.userId IN (:...userIds)', { userIds: mutualFriendIds.map(id => id.toString()) })
+        .andWhere('video.createdAt > :since', { since: sevenDaysAgo })
         .orderBy('video.createdAt', 'DESC')
         .take(limit)
         .getMany();
 
-      console.log(`[OK] Found ${videos.length} videos from mutual friends`);
+      console.log(`[OK] Found ${videos.length} recent videos from mutual friends (last 7 days)`);
 
       // Add like and comment counts
       const videosWithCounts = await Promise.all(
@@ -577,6 +588,64 @@ export class VideosService {
     } catch (error) {
       console.error('[ERROR] Error in getFriendsVideos:', error);
       throw error;
+    }
+  }
+
+  // Count new videos from following users since a given date
+  async getFollowingNewVideoCount(userId: number, since: Date): Promise<number> {
+    try {
+      const userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3000';
+      
+      const followingResponse = await firstValueFrom(
+        this.httpService.get(`${userServiceUrl}/follows/following/${userId}`)
+      );
+      const followingIds: number[] = followingResponse.data.followingIds || [];
+      if (followingIds.length === 0) return 0;
+
+      // Exclude mutual friends
+      const mutualFriendsResponse = await firstValueFrom(
+        this.httpService.get(`${userServiceUrl}/follows/mutual-friends/${userId}?limit=1000`)
+      );
+      const mutualFriendIds: number[] = (mutualFriendsResponse.data.data || []).map((f: any) => f.userId);
+      const followingOnlyIds = followingIds.filter(id => !mutualFriendIds.includes(id));
+      if (followingOnlyIds.length === 0) return 0;
+
+      const count = await this.videoRepository
+        .createQueryBuilder('video')
+        .where('video.status = :status', { status: VideoStatus.READY })
+        .andWhere('video.userId IN (:...userIds)', { userIds: followingOnlyIds.map(id => id.toString()) })
+        .andWhere('video.createdAt > :since', { since })
+        .getCount();
+
+      return count;
+    } catch (error) {
+      console.error('[ERROR] Error in getFollowingNewVideoCount:', error);
+      return 0;
+    }
+  }
+
+  // Count new videos from mutual friends since a given date
+  async getFriendsNewVideoCount(userId: number, since: Date): Promise<number> {
+    try {
+      const userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3000';
+      
+      const mutualFriendsResponse = await firstValueFrom(
+        this.httpService.get(`${userServiceUrl}/follows/mutual-friends/${userId}?limit=1000`)
+      );
+      const mutualFriendIds: number[] = (mutualFriendsResponse.data.data || []).map((f: any) => f.userId);
+      if (mutualFriendIds.length === 0) return 0;
+
+      const count = await this.videoRepository
+        .createQueryBuilder('video')
+        .where('video.status = :status', { status: VideoStatus.READY })
+        .andWhere('video.userId IN (:...userIds)', { userIds: mutualFriendIds.map(id => id.toString()) })
+        .andWhere('video.createdAt > :since', { since })
+        .getCount();
+
+      return count;
+    } catch (error) {
+      console.error('[ERROR] Error in getFriendsNewVideoCount:', error);
+      return 0;
     }
   }
 
@@ -948,6 +1017,7 @@ export class VideosService {
         filePath: videoFile.path,
         fileName: videoFile.filename,
         skipThumbnailGeneration: !!thumbnailFile,
+        thumbnailTimestamp: uploadVideoDto.thumbnailTimestamp,
       });
       console.log('Job sent to RabbitMQ queue');
 

@@ -11,6 +11,7 @@ import { AuthProvider } from '../entities/user.entity';
 import { FirebaseAdminService } from './firebase-admin.service';
 import { OtpService } from '../otp/otp.service';
 import { EmailService } from '../config/email.service';
+import { TotpService } from './totp.service';
 
 @Injectable()
 export class AuthService {
@@ -23,6 +24,7 @@ export class AuthService {
     private firebaseAdminService: FirebaseAdminService,
     private otpService: OtpService,
     private emailService: EmailService,
+    private totpService: TotpService,
   ) {
     // Initialize Google OAuth client
     this.googleClient = new OAuth2Client(
@@ -663,27 +665,38 @@ export class AuthService {
 
       // Verify OTP
       await this.otpService.verifyOtp(user.email, otp, '2fa');
+    } else if (method === 'totp') {
+      // Verify TOTP token from authenticator app
+      const secret = await this.usersService.getTotpSecret(userId);
+      if (!secret) {
+        throw new BadRequestException('Chưa thiết lập ứng dụng xác thực');
+      }
 
-      // Generate JWT token
-      const payload = { sub: user.id, username: user.username };
-      const token = this.jwtService.sign(payload);
-
-      return {
-        success: true,
-        message: 'Xác thực thành công',
-        access_token: token,
-        user: {
-          id: user.id,
-          username: user.username,
-          email: user.email,
-          phoneNumber: user.phoneNumber,
-          avatar: user.avatar,
-          fullName: user.fullName,
-        },
-      };
+      const isValid = await this.totpService.verifyToken(otp, secret);
+      if (!isValid) {
+        throw new BadRequestException('Mã xác thực không hợp lệ hoặc đã hết hạn');
+      }
+    } else {
+      throw new BadRequestException('Phương thức xác thực không hợp lệ');
     }
 
-    throw new BadRequestException('Phương thức xác thực không hợp lệ');
+    // Generate JWT token
+    const payload = { sub: user.id, username: user.username };
+    const token = this.jwtService.sign(payload);
+
+    return {
+      success: true,
+      message: 'Xác thực thành công',
+      access_token: token,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        phoneNumber: user.phoneNumber,
+        avatar: user.avatar,
+        fullName: user.fullName,
+      },
+    };
   }
 
   // Send OTP for 2FA settings change
@@ -754,14 +767,28 @@ export class AuthService {
     } else if (method === 'sms') {
       // SMS OTP is verified by Firebase on client side
       // We trust the client has already verified with Firebase
-      // In production, you may want to verify Firebase token here
+    } else if (method === 'totp') {
+      // Verify TOTP token from authenticator app
+      const secret = await this.usersService.getTotpSecret(userId);
+      if (!secret) {
+        throw new BadRequestException('Chưa thiết lập ứng dụng xác thực');
+      }
+      const isValid = await this.totpService.verifyToken(otp, secret);
+      if (!isValid) {
+        throw new BadRequestException('Mã xác thực không hợp lệ hoặc đã hết hạn');
+      }
     } else {
       throw new BadRequestException('Phương thức xác thực không hợp lệ');
     }
 
-    // Update 2FA settings
-    const validMethods = ['email', 'sms'];
+    // Update 2FA settings — if disabling and removing totp, also clear the secret
+    const validMethods = ['email', 'sms', 'totp'];
     const filteredMethods = methods.filter(m => validMethods.includes(m));
+
+    // If totp is being removed, clear the TOTP secret
+    if (!filteredMethods.includes('totp')) {
+      await this.usersService.setTotpSecret(userId, null);
+    }
 
     const result = await this.usersService.update2FASettings(userId, enabled, filteredMethods);
     if (!result.success) {
@@ -773,6 +800,64 @@ export class AuthService {
       message: enabled ? 'Đã bật xác thực 2 bước' : 'Đã tắt xác thực 2 bước',
       enabled,
       methods: filteredMethods,
+    };
+  }
+
+  // ============= TOTP SETUP (Google Authenticator) =============
+
+  // Step 1: Generate TOTP secret and QR code for user to scan
+  async setupTotp(userId: number) {
+    const user = await this.usersService.findById(userId);
+    if (!user) {
+      throw new BadRequestException('Không tìm thấy tài khoản');
+    }
+
+    // Generate a new secret
+    const secret = this.totpService.createSecret();
+
+    // Generate otpauth:// URI for authenticator app
+    const accountName = user.username || user.email || `user_${userId}`;
+    const otpauthUrl = this.totpService.generateKeyUri(accountName, secret);
+
+    // Generate QR code as base64 data URL
+    const qrCodeUrl = await this.totpService.generateQRCode(otpauthUrl);
+
+    return {
+      success: true,
+      secret,
+      qrCodeUrl,
+      otpauthUrl,
+    };
+  }
+
+  // Step 2: Verify the initial TOTP token and save the secret
+  async verifyTotpSetup(userId: number, token: string, secret: string) {
+    const user = await this.usersService.findById(userId);
+    if (!user) {
+      throw new BadRequestException('Không tìm thấy tài khoản');
+    }
+
+    // Verify the token against the provided secret
+    const isValid = await this.totpService.verifyToken(token, secret);
+    if (!isValid) {
+      throw new BadRequestException('Mã xác thực không hợp lệ. Vui lòng thử lại.');
+    }
+
+    // Save TOTP secret to user
+    await this.usersService.setTotpSecret(userId, secret);
+
+    // Add 'totp' to 2FA methods and enable 2FA
+    const currentMethods = user.twoFactorMethods || [];
+    if (!currentMethods.includes('totp')) {
+      currentMethods.push('totp');
+    }
+    await this.usersService.update2FASettings(userId, true, currentMethods);
+
+    return {
+      success: true,
+      message: 'Đã thiết lập ứng dụng xác thực thành công',
+      enabled: true,
+      methods: currentMethods,
     };
   }
 }

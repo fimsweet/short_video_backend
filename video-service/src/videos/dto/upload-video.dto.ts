@@ -28,4 +28,14 @@ export class UploadVideoDto {
     return value;
   })
   categoryIds?: number[];
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      const parsed = parseFloat(value);
+      return isNaN(parsed) ? undefined : parsed;
+    }
+    return value;
+  })
+  thumbnailTimestamp?: number; // Timestamp in seconds for auto-generated thumbnail frame
 }

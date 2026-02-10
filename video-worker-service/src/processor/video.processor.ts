@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+Ôªøimport { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -33,7 +33,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
   // ============================================
   // FFmpeg process tracking for graceful shutdown
   // ============================================
-  // Luu reference t?i FFmpeg process dang ch?y d? cÛ th? kill khi shutdown
+  // Luu reference t?i FFmpeg process dang ch?y d? cÔøΩ th? kill khi shutdown
   private activeFFmpegProcesses: Map<string, any> = new Map();
 
   constructor(
@@ -50,7 +50,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleInit() {
-    // T?o thu m?c processed_videos n?u chua cÛ
+    // T?o thu m?c processed_videos n?u chua cÔøΩ
     if (!fs.existsSync(this.processedDir)) {
       fs.mkdirSync(this.processedDir, { recursive: true });
     }
@@ -62,17 +62,11 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
   // ============================================
   // Graceful Shutdown for Kubernetes
   // ============================================
-  // Khi K8s g?i SIGTERM, pod cÛ 30s (default) d? cleanup
-  // Worker c?n:
-  // 1. Ng?ng nh?n job m?i
-  // 2. –?i job hi?n t?i ho‡n th‡nh
-  // 3. –Ûng connection
-  // ============================================
   async onModuleDestroy() {
     console.log('[SHUTDOWN] Received shutdown signal, gracefully stopping worker...');
     this.isShuttingDown = true;
 
-    // Cancel consumer d? khÙng nh?n job m?i
+    // Cancel consumer ƒë·ªÉ kh√¥ng nh·∫≠n job m·ªõi
     if (this.channel) {
       try {
         await this.channel.cancel('video-worker-consumer');
@@ -82,7 +76,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // –?i job hi?n t?i ho‡n th‡nh (max 60s)
+    // ƒê·ª£i job hi·ªán t·∫°i ho√†n th√†nh (max 60s)
     const maxWait = 60;
     let waited = 0;
     while (this.currentJobCount > 0 && waited < maxWait) {
@@ -92,7 +86,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     }
 
     // ============================================
-    // Kill zombie FFmpeg processes n?u timeout
+    // Kill zombie FFmpeg processes n·∫øu timeout
     // ============================================
     if (this.activeFFmpegProcesses.size > 0) {
       console.warn(`[WARN] Killing ${this.activeFFmpegProcesses.size} hanging FFmpeg process(es)...`);
@@ -107,7 +101,6 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       this.activeFFmpegProcesses.clear();
     }
 
-    // –Ûng connection
     if (this.channel) {
       try {
         await this.channel.close();
@@ -137,7 +130,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       this.channel = await this.connection.createChannel();
 
       // ============================================
-      // Error handlers d? tr·nh unhandled error crash
+      // Error handlers ƒë·ªÉ tr√°nh unhandled error crash
       // ============================================
       this.connection.on('error', (err) => {
         console.error('[ERROR] RabbitMQ connection error:', err.message);
@@ -248,19 +241,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
 
   private async setupConsumer(channel: amqp.Channel, dlqName: string, dlqEnabled: boolean): Promise<void> {
     // ============================================
-    // [WARN] CRITICAL: Concurrency Configuration for K8s
-    // ============================================
-    // KH‘NG d˘ng os.cpus() vÏ trong Docker/K8s nÛ tr? v? CPU c?a host node
-    // VÌ d?: Node cÛ 64 cores nhung Pod gi?i h?n 1 core ? code th?y 64 ? crash
-    //
-    // BEST PRACTICE cho AWS/K8s:
-    // - Set WORKER_CONCURRENCY=1 ho?c 2 trong Deployment YAML
-    // - Scale b?ng s? lu?ng Pod (Horizontal Scaling) thay vÏ nhi?u job/Pod
-    // - V?i KEDA: Queue d?y ? auto scale Pods
-    //
-    // FFmpeg l‡ CPU-bound task, ch?y nhi?u job song song trÍn 1 Pod s?:
-    // - Context switching liÍn t?c ? ch?m hon l‡m tu?n t?
-    // - Nguy co OOM cao
+    // Concurrency Configuration for K8s
     // ============================================
     const concurrentJobs = parseInt(
       this.configService.get<string>('WORKER_CONCURRENCY') || '1',  // Default = 1 cho K8s
@@ -268,7 +249,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     );
     channel.prefetch(concurrentJobs);
     
-    // Log warning n?u concurrency > 2 trÍn production
+    // Log warning concurrency > 2 production
     if (process.env.NODE_ENV === 'production' && concurrentJobs > 2) {
       console.warn(`[WARN] WARNING: WORKER_CONCURRENCY=${concurrentJobs} may cause performance issues on K8s`);
       console.warn(`   Recommend: Set WORKER_CONCURRENCY=1 and scale with more Pods instead`);
@@ -299,19 +280,19 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
           console.error(`[-] Failed to process job ${job.videoId}:`, error.message);
           
           if (dlqEnabled) {
-            // Job chuy?n v‡o DLQ d? admin review
+            // Job chuy·ªÉn v√†o DLQ ƒë·ªÉ admin review
             channel.nack(msg, false, false);
             console.log(`[!] Job ${job.videoId} moved to Dead Letter Queue for manual review`);
           } else {
             // ============================================
             // [WARN] FIX: Poison Pill Prevention
             // ============================================
-            // KH‘NG requeue khi khÙng cÛ DLQ!
-            // N?u video l?i (file h?ng, codec khÙng h? tr?...), requeue s? t?o
+            // KH√îNG requeue khi kh√¥ng c√≥ DLQ!
+            // N·∫øu video l·ªói (file h·ªèng, codec kh√¥ng h·ªó tr·ª£...), requeue s·∫Ω t·∫°o
             // infinite loop: Error -> Requeue -> Error -> Requeue...
             // 
-            // Gi?i ph·p: Ack message (xÛa kh?i queue) v‡ update DB = FAILED
-            // Video b? m?t nhung h? th?ng khÙng b? treo
+            // Gi·∫£i ph√°p: Ack message (x√≥a kh·ªèi queue) v√† update DB = FAILED
+            // Video b·ªã m·∫•t nh∆∞ng h·ªá th·ªëng kh√¥ng b·ªã treo
             // ============================================
             channel.ack(msg); // Accept & remove from queue
             console.error(`[!] Job ${job.videoId} FAILED and DISCARDED (no DLQ configured)`);
@@ -335,7 +316,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processVideo(job: any): Promise<void> {
-    const { videoId, filePath, fileName } = job;
+    const { videoId, filePath, fileName, skipThumbnailGeneration, thumbnailTimestamp } = job;
 
     // ============================================
     // ??? DECLARE PATHS OUTSIDE TRY FOR CLEANUP ACCESS
@@ -351,7 +332,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       console.log(`[VIDEO] PROCESSING VIDEO: ${videoId}`);
       console.log(`${'='.repeat(60)}`);
       
-      // 1. L?y thÙng tin video t? database
+      // 1. l·∫•y th√¥ng tin t·ª´ database
       const video = await this.videoRepository.findOne({ where: { id: videoId } });
       if (!video) {
         throw new Error(`Video ${videoId} not found in database`);
@@ -361,9 +342,8 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       console.log(`   Title: ${video.title}`);
       console.log(`   User: ${video.userId}`);
 
-      // 2. Chu?n b? du?ng d?n
       // ============================================
-      // ?? DOCKER/K8S COMPATIBLE PATH RESOLUTION
+      //  DOCKER/K8S COMPATIBLE PATH RESOLUTION
       // ============================================
       // In Docker: Both services mount shared volume at /app/uploads
       // Set UPLOAD_ROOT_PATH=/app/uploads in docker-compose
@@ -418,13 +398,18 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       const originalAspectRatio = await this.getVideoAspectRatio(inputPath);
       console.log(`[OK] Aspect ratio: ${originalAspectRatio}`);
 
-      // 4. X? l˝ video b?ng FFmpeg (convert sang HLS)
+      // 4. FFmpeg (convert sang HLS)
       console.log(`[FFMPEG] Starting FFmpeg conversion...`);
       await this.convertToHLS(inputPath, outputDir, videoId, originalAspectRatio);
 
-      // 5. T?o thumbnail t? video
-      console.log(`[THUMB] Generating thumbnail...`);
-      await this.generateThumbnail(inputPath, outputDir);
+      // 5. T·∫°o thumbnail t·ª´ video (skip if custom thumbnail already provided)
+      if (skipThumbnailGeneration && video.thumbnailUrl) {
+        console.log(`[THUMB] Skipping thumbnail generation - custom thumbnail already provided`);
+        console.log(`   Existing thumbnail: ${video.thumbnailUrl}`);
+      } else {
+        console.log(`[THUMB] Generating thumbnail...`);
+        await this.generateThumbnail(inputPath, outputDir, thumbnailTimestamp);
+      }
 
       // 6. Upload to S3 or use local paths
       let hlsUrl: string;
@@ -435,7 +420,10 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
         console.log(`[S3] Uploading to S3 (parallel mode)...`);
         const uploadResult = await this.storageService.uploadProcessedVideo(outputDir, videoId);
         hlsUrl = uploadResult.hlsUrl;
-        thumbnailUrl = uploadResult.thumbnailUrl;
+        // Keep custom thumbnail if provided, otherwise use generated one
+        thumbnailUrl = (skipThumbnailGeneration && video.thumbnailUrl) 
+          ? video.thumbnailUrl 
+          : uploadResult.thumbnailUrl;
 
         // Clean up local processed files after S3 upload
         console.log(`[CLEANUP] Cleaning up local processed files...`);
@@ -443,7 +431,10 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       } else {
         // Use local paths - ABR uses master.m3u8 as entry point
         hlsUrl = `/uploads/processed_videos/${outputFileName}/master.m3u8`;
-        thumbnailUrl = `/uploads/processed_videos/${outputFileName}/thumbnail.jpg`;
+        // Keep custom thumbnail if provided, otherwise use generated one
+        thumbnailUrl = (skipThumbnailGeneration && video.thumbnailUrl) 
+          ? video.thumbnailUrl 
+          : `/uploads/processed_videos/${outputFileName}/thumbnail.jpg`;
       }
 
       // 7. Delete raw video file to save storage (best practice for video platforms)
@@ -459,7 +450,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
         console.warn(`[WARN] Could not delete raw video: ${deleteError.message}`);
       }
 
-      // 8. C?p nh?t database v?i aspect ratio v‡ thumbnail
+      // 8. C·∫≠p nh·∫≠t database v·ªõi aspect ratio v√† thumbnail
       await this.videoRepository.update(videoId, {
         status: VideoStatus.READY,
         hlsUrl: hlsUrl,
@@ -474,6 +465,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       console.log(`[OK] VIDEO PROCESSING COMPLETED: ${videoId}`);
       console.log(`   HLS URL: ${hlsUrl}`);
       console.log(`   Thumbnail URL: ${thumbnailUrl}`);
+      console.log(`   Custom Thumbnail: ${skipThumbnailGeneration ? 'Yes' : 'No'}`);
       console.log(`   Aspect Ratio: ${originalAspectRatio}`);
       console.log(`${'='.repeat(60)}\n`);
     } catch (error) {
@@ -509,7 +501,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
         console.error(`[WARN] Cleanup failed (manual intervention may be needed):`, cleanupError.message);
       }
 
-      // C?p nh?t status th‡nh FAILED
+      // C·∫≠p nh·∫≠t status th√†nh FAILED
       await this.videoRepository.update(videoId, {
         status: VideoStatus.FAILED,
         errorMessage: error.message || 'Unknown error',
@@ -574,15 +566,12 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ============================================
-  // ?? ADAPTIVE BITRATE STREAMING (ABR)
+  // ADAPTIVE BITRATE STREAMING (ABR)
   // ============================================
-  // T?o master.m3u8 v?i nhi?u ch?t lu?ng d? player t? ch?n
-  // theo di?u ki?n m?ng c?a user (nhu YouTube, Netflix)
-  //
-  // Variants du?c t?o:
-  // - 720p (HD)   : M?ng t?t, WiFi
-  // - 480p (SD)   : M?ng trung bÏnh, 4G
-  // - 360p (Low)  : M?ng y?u, 3G
+  // Variants ƒë∆∞·ª£c t·∫°o:
+  // - 720p (HD)   : M·∫°ng t·ªët, WiFi
+  // - 480p (SD)   : M·∫°ng trung b√¨nh, 4G
+  // - 360p (Low)  : M·∫°ng y·∫øu, 3G
   // ============================================
   private async convertToHLS(inputPath: string, outputDir: string, videoId?: string, originalAspectRatio: string = '16:9'): Promise<void> {
     console.log(`[VIDEO] [ABR] Starting Adaptive Bitrate encoding...`);
@@ -757,17 +746,22 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  private generateThumbnail(inputPath: string, outputDir: string): Promise<string> {
+  private generateThumbnail(inputPath: string, outputDir: string, thumbnailTimestamp?: number): Promise<string> {
     return new Promise((resolve, reject) => {
       const thumbnailPath = `${outputDir}/thumbnail.jpg`;
       
-      console.log(`[THUMB] Generating thumbnail at: ${thumbnailPath}`);
+      // Convert timestamp (seconds) to HH:MM:SS format for FFmpeg
+      const seekTime = thumbnailTimestamp != null && thumbnailTimestamp > 0
+        ? this.formatSeekTime(thumbnailTimestamp)
+        : '00:00:01';
+      
+      console.log(`[THUMB] Generating thumbnail at: ${thumbnailPath} (seek: ${seekTime})`);
       
       // Use FFmpeg to create thumbnail with proper aspect ratio
       ffmpeg(inputPath)
         .outputOptions([
-          // Seek to 10% of video duration
-          '-ss', '00:00:01',
+          // Seek to selected frame position
+          '-ss', seekTime,
           // Take 1 frame
           '-vframes', '1',
           // Smart crop to 1:1 square for grid view (like Instagram/TikTok)
@@ -798,6 +792,14 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
         })
         .run();
     });
+  }
+
+  // Convert seconds to HH:MM:SS.ms format for FFmpeg -ss flag
+  private formatSeekTime(seconds: number): string {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toFixed(2).padStart(5, '0')}`;
   }
 
   // Notify video-service to invalidate cache after processing

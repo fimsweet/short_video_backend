@@ -73,16 +73,16 @@ export class OtpService {
 
             if (expiredOtp) {
                 if (expiredOtp.isUsed) {
-                    throw new BadRequestException('OTP already used');
+                    throw new BadRequestException('Mã xác thực đã được sử dụng');
                 }
                 if (expiredOtp.expiresAt < new Date()) {
-                    throw new BadRequestException('OTP expired');
+                    throw new BadRequestException('Mã xác thực đã hết hạn');
                 }
             }
 
             // Increment attempt counter for rate limiting
             await this.incrementAttempts(identifier, purpose);
-            throw new BadRequestException('Invalid OTP');
+            throw new BadRequestException('Mã xác thực không đúng');
         }
 
         // Mark OTP as used

@@ -162,14 +162,14 @@ export class MessagesService {
     return this.messageRepository.count({ where: { recipientId: userId, isRead: false } });
   }
 
-  async getConversationSettings(userId: string, recipientId: string): Promise<{ isMuted: boolean; isPinned: boolean; themeColor: string | null; nickname: string | null }> {
+  async getConversationSettings(userId: string, recipientId: string): Promise<{ isMuted: boolean; isPinned: boolean; themeColor: string | null; nickname: string | null; autoTranslate: boolean }> {
     const conversationId = this.getConversationId(userId, recipientId);
     const conversation = await this.conversationRepository.findOne({
       where: { id: conversationId },
     });
 
     if (!conversation) {
-      return { isMuted: false, isPinned: false, themeColor: null, nickname: null };
+      return { isMuted: false, isPinned: false, themeColor: null, nickname: null, autoTranslate: false };
     }
 
     // Check if user is participant1 or participant2 to get correct settings
@@ -180,13 +180,14 @@ export class MessagesService {
       isPinned: isParticipant1 ? (conversation.isPinnedBy1 ?? false) : (conversation.isPinnedBy2 ?? false),
       themeColor: isParticipant1 ? (conversation.themeColorBy1 ?? null) : (conversation.themeColorBy2 ?? null),
       nickname: isParticipant1 ? (conversation.nicknameBy1 ?? null) : (conversation.nicknameBy2 ?? null),
+      autoTranslate: isParticipant1 ? (conversation.autoTranslateBy1 ?? false) : (conversation.autoTranslateBy2 ?? false),
     };
   }
 
   async updateConversationSettings(
     userId: string,
     recipientId: string,
-    settings: { isMuted?: boolean; isPinned?: boolean; themeColor?: string; nickname?: string },
+    settings: { isMuted?: boolean; isPinned?: boolean; themeColor?: string; nickname?: string; autoTranslate?: boolean },
   ): Promise<void> {
     const conversationId = this.getConversationId(userId, recipientId);
     let conversation = await this.conversationRepository.findOne({
@@ -234,6 +235,14 @@ export class MessagesService {
         conversation.nicknameBy1 = settings.nickname;
       } else {
         conversation.nicknameBy2 = settings.nickname;
+      }
+    }
+
+    if (settings.autoTranslate !== undefined) {
+      if (isParticipant1) {
+        conversation.autoTranslateBy1 = settings.autoTranslate;
+      } else {
+        conversation.autoTranslateBy2 = settings.autoTranslate;
       }
     }
 
@@ -478,7 +487,7 @@ export class MessagesService {
       const targetLang = targetLanguage === 'vi' ? 'Vietnamese' : 'English';
       
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
         {
           method: 'POST',
           headers: {

@@ -1,15 +1,101 @@
 # ============================================
-# DOCKER COMPOSE - PRODUCTION (AWS)
-# ============================================
-# This file is for reference when deploying to AWS
-# In production, use AWS managed services instead of containers
+# DOCKER COMPOSE - PRODUCTION (AWS EC2)
 # ============================================
 
 version: '3.8'
 
 services:
   # ============================================
-  # USER SERVICE
+  # INFRASTRUCTURE SERVICES
+  # ============================================
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    restart: always
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      # BIND MOUNT: Lưu vào ổ 100GB
+      - /data/mysql:/var/lib/mysql
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: always
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      # BIND MOUNT: Lưu vào ổ 100GB
+      - /data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - backend
+
+  rabbitmq:
+    image: rabbitmq:3.11-management-alpine
+    container_name: rabbitmq
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: user
+      RABBITMQ_DEFAULT_PASS: password
+    volumes:
+      # BIND MOUNT: Lưu vào ổ 100GB
+      - /data/rabbitmq:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - backend
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: elasticsearch
+    restart: always
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      # BIND MOUNT: Lưu vào ổ 100GB (ES ăn ổ cứng rất nặng)
+      - /data/elasticsearch:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - backend
+
+  # ============================================
+  # APPLICATION SERVICES
   # ============================================
   user-service:
     build:
@@ -19,44 +105,24 @@ services:
     restart: always
     ports:
       - "3000:3000"
+    env_file:
+      - ./user-service/.env
     environment:
       - NODE_ENV=production
-      - PORT=3000
-      # Database (AWS RDS)
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
-      - DB_USERNAME=${DB_USERNAME}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME}
-      # Redis (AWS ElastiCache)
-      - REDIS_HOST=${REDIS_HOST}
-      - REDIS_PORT=${REDIS_PORT}
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      # JWT
-      - JWT_SECRET=${JWT_SECRET}
-      - JWT_EXPIRATION=${JWT_EXPIRATION}
-      # AWS S3
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=${AWS_REGION}
-      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
-      - CLOUDFRONT_URL=${CLOUDFRONT_URL}
-      # Google OAuth
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-      # Email
-      - EMAIL_USER=${EMAIL_USER}
-      - EMAIL_APP_PASSWORD=${EMAIL_APP_PASSWORD}
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - DB_HOST=mysql
+      - REDIS_HOST=redis
+    volumes:
+      - ./user-service/firebase-service-account.json:/app/firebase-service-account.json:ro
+      # BIND MOUNT: Avatar uploads lưu vào ổ 100GB
+      - /data/uploads:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
-      - backend-network
+      - backend
 
-  # ============================================
-  # VIDEO SERVICE
-  # ============================================
   video-service:
     build:
       context: ./video-service
@@ -65,103 +131,72 @@ services:
     restart: always
     ports:
       - "3002:3002"
+    env_file:
+      - ./video-service/.env
     environment:
       - NODE_ENV=production
-      - PORT=3002
-      # Database (AWS RDS)
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
-      - DB_USERNAME=${DB_USERNAME}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_DATABASE=${DB_NAME}
-      # Redis (AWS ElastiCache)
-      - REDIS_HOST=${REDIS_HOST}
-      - REDIS_PORT=${REDIS_PORT}
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      # RabbitMQ / SQS
-      - RABBITMQ_URL=${RABBITMQ_URL}
-      - RABBITMQ_QUEUE=${RABBITMQ_QUEUE}
-      - USE_SQS=${USE_SQS}
-      - AWS_SQS_QUEUE_URL=${AWS_SQS_QUEUE_URL}
-      # Elasticsearch (AWS OpenSearch)
-      - ELASTICSEARCH_NODE=${ELASTICSEARCH_NODE}
-      # AWS S3
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=${AWS_REGION}
-      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
-      - CLOUDFRONT_URL=${CLOUDFRONT_URL}
-      # User Service
+      - DB_HOST=mysql
+      - REDIS_HOST=redis
+      - RABBITMQ_URL=amqp://user:password@rabbitmq:5672
+      - ELASTICSEARCH_NODE=http://elasticsearch:9200
       - USER_SERVICE_URL=http://user-service:3000
+    volumes:
+      # BIND MOUNT: Video uploads lưu vào ổ 100GB
+      - /data/uploads:/app/uploads
     depends_on:
-      - user-service
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3002/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
     networks:
-      - backend-network
+      - backend
 
-  # ============================================
-  # VIDEO WORKER SERVICE
-  # ============================================
   video-worker:
     build:
       context: ./video-worker-service
       dockerfile: Dockerfile
-    container_name: video-worker
+    #container_name: video-worker
     restart: always
-    # No ports - this is a background worker
+    #ports:
+    #  - "3003:3003"
+    env_file:
+      - ./video-worker-service/.env
     environment:
       - NODE_ENV=production
-      # Database (AWS RDS)
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
-      - DB_USERNAME=${DB_USERNAME}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_DATABASE=${DB_NAME}
-      # RabbitMQ / SQS
-      - RABBITMQ_URL=${RABBITMQ_URL}
-      - RABBITMQ_QUEUE=${RABBITMQ_QUEUE}
-      - USE_SQS=${USE_SQS}
-      - AWS_SQS_QUEUE_URL=${AWS_SQS_QUEUE_URL}
-      # ============================================
-      # ⚠️ WORKER CONCURRENCY - CRITICAL FOR SCALING
-      # ============================================
-      # FFmpeg is CPU-bound. Do NOT increase this!
-      # - Setting WORKER_CONCURRENCY=1 means 1 video/container
-      # - Scale by increasing replicas, not concurrency
-      # - Multiple FFmpeg processes = context switching overhead
-      # ============================================
-      - WORKER_CONCURRENCY=1
-      # ============================================
-      # 🐳 SHARED VOLUME PATH
-      # ============================================
-      # For S3-first workflow: Worker downloads from S3 directly
-      # For shared volume: Set to the mount point path
-      # ============================================
-      - UPLOAD_ROOT_PATH=/app/uploads
-      # AWS S3
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_REGION=${AWS_REGION}
-      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
-      - CLOUDFRONT_URL=${CLOUDFRONT_URL}
-      # Video Service
+      - DB_HOST=mysql
+      - RABBITMQ_URL=amqp://user:password@rabbitmq:5672
       - VIDEO_SERVICE_URL=http://video-service:3002
+      # QUAN TRỌNG: Override paths để khớp với bind mount
+      - UPLOAD_ROOT_PATH=/app
+      - RAW_VIDEOS_PATH=uploads/raw_videos
+      - PROCESSED_VIDEOS_PATH=uploads/processed_videos
+      - WORKER_CONCURRENCY=2
+    volumes:
+      # BIND MOUNT: Dùng CÙNG thư mục với video-service
+      - /data/uploads:/app/uploads
     depends_on:
-      - video-service
-    networks:
-      - backend-network
-    # Scale workers based on load
+      video-service:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
     deploy:
-      replicas: 2
       resources:
         limits:
+          cpus: '2'
+          memory: 3G
+        reservations:
           cpus: '1'
-          memory: 2G
+          memory: 1G
+    networks:
+      - backend
+
+# KHÔNG CẦN khai báo volumes vì dùng bind mount trực tiếp
 
 networks:
-  backend-network:
+  backend:
     driver: bridge
+

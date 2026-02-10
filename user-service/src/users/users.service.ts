@@ -1076,6 +1076,27 @@ export class UsersService {
     };
   }
 
+  // Set TOTP secret for a user
+  async setTotpSecret(userId: number, secret: string | null): Promise<boolean> {
+    try {
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) return false;
+      user.totpSecret = secret;
+      await this.userRepository.save(user);
+      await this.cacheManager.del(`user:id:${user.id}`);
+      return true;
+    } catch (error) {
+      console.error('Error setting TOTP secret:', error);
+      return false;
+    }
+  }
+
+  // Get TOTP secret for a user
+  async getTotpSecret(userId: number): Promise<string | null> {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    return user?.totpSecret || null;
+  }
+
   // Reset password by phone (for phone users)
   async resetPasswordByPhone(phone: string, newPassword: string): Promise<{ success: boolean; message: string }> {
     try {
