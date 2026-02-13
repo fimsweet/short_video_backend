@@ -44,7 +44,9 @@ RUN npm ci --only=production && npm cache clean --force
 COPY --from=builder /app/dist ./dist
 
 # Create temp directories for video processing
-RUN mkdir -p processed_videos temp && chown -R nestjs:nodejs processed_videos temp
+# Tạo TẤT CẢ thư mục worker có thể cần (cả trên EC2 lẫn AWS Batch)
+RUN mkdir -p uploads/raw_videos uploads/processed_videos processed_videos temp \
+    && chown -R nestjs:nodejs uploads processed_videos temp
 
 # Switch to non-root user
 USER nestjs

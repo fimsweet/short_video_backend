@@ -9,6 +9,7 @@ import { ActivityLoggerModule } from './config/activity-logger.module';
 import { PrivacyModule } from './config/privacy.module';
 import { CleanupModule } from './common/cleanup.module';
 import { HealthModule } from './health/health.module';
+import { ScalingModule } from './scaling/scaling.module';
 import { VideosModule } from './videos/videos.module';
 import { LikesModule } from './likes/likes.module';
 import { CommentsModule } from './comments/comments.module';
@@ -50,6 +51,7 @@ import { getDatabaseConfig } from './config/database.config';
     PrivacyModule, //  Privacy settings check (global)
     CleanupModule, //  Auto cleanup temp files (every 6h + 3AM daily)
     HealthModule, // Health check endpoints
+    ScalingModule, //  AWS Batch auto-scaling for video workers
     VideosModule,
     LikesModule,
     CommentsModule,

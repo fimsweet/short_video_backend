@@ -29,6 +29,21 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
   private currentJobCount = 0;
   private retryCount = 0;
   private readonly MAX_RETRIES = 10;
+
+  // ============================================
+  // AWS BATCH MODE - Auto-exit when idle
+  // ============================================
+  // When running as an AWS Batch job, the worker should
+  // automatically exit when the queue is empty to release
+  // the EC2 instance and save costs.
+  // Set BATCH_MODE=true and AUTO_EXIT_WHEN_IDLE=true
+  // ============================================
+  private isBatchMode = false;
+  private autoExitWhenIdle = false;
+  private idleTimeoutSeconds = 60;
+  private lastJobCompletedAt = 0;
+  private idleCheckInterval: NodeJS.Timeout | null = null;
+  private totalJobsProcessed = 0;
   
   // ============================================
   // FFmpeg process tracking for graceful shutdown
@@ -47,6 +62,14 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     this.queueName = this.configService.get<string>('RABBITMQ_QUEUE') || 'video_processing_queue';
     this.processedDir = this.configService.get<string>('PROCESSED_VIDEOS_PATH') || './processed_videos';
     this.videoServiceUrl = this.configService.get<string>('VIDEO_SERVICE_URL') || 'http://localhost:3002';
+
+    // AWS Batch mode configuration
+    this.isBatchMode = this.configService.get<string>('BATCH_MODE') === 'true';
+    this.autoExitWhenIdle = this.configService.get<string>('AUTO_EXIT_WHEN_IDLE') === 'true';
+    this.idleTimeoutSeconds = parseInt(
+      this.configService.get<string>('IDLE_TIMEOUT_SECONDS') || '60',
+      10,
+    );
   }
 
   async onModuleInit() {
@@ -55,8 +78,35 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       fs.mkdirSync(this.processedDir, { recursive: true });
     }
 
-    // B?t d?u l?ng nghe RabbitMQ queue
+    // ============================================
+    // AWS BATCH MODE LOGGING
+    // ============================================
+    if (this.isBatchMode) {
+      console.log('============================================');
+      console.log('  AWS BATCH MODE ACTIVE');
+      console.log('============================================');
+      console.log(`  Auto-exit when idle: ${this.autoExitWhenIdle}`);
+      console.log(`  Idle timeout: ${this.idleTimeoutSeconds}s`);
+      console.log(`  This worker will automatically terminate`);
+      console.log(`  when the queue is empty to save costs.`);
+      console.log('============================================');
+    }
+
+    // Bắt đầu lắng nghe RabbitMQ queue
     await this.startWorker();
+
+    // ============================================
+    // START IDLE MONITOR (AWS Batch only)
+    // ============================================
+    // Periodically checks if the worker has been idle
+    // for too long and exits if so
+    // ============================================
+    if (this.autoExitWhenIdle) {
+      this.lastJobCompletedAt = Date.now();
+      this.idleCheckInterval = setInterval(async () => {
+        await this.checkIdleAndExit();
+      }, 10000); // Check every 10 seconds
+    }
   }
 
   // ============================================
@@ -65,6 +115,12 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
   async onModuleDestroy() {
     console.log('[SHUTDOWN] Received shutdown signal, gracefully stopping worker...');
     this.isShuttingDown = true;
+
+    // Clear idle check interval (AWS Batch mode)
+    if (this.idleCheckInterval) {
+      clearInterval(this.idleCheckInterval);
+      this.idleCheckInterval = null;
+    }
 
     // Cancel consumer để không nhận job mới
     if (this.channel) {
@@ -117,6 +173,67 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     }
 
     console.log('[OK] Worker shutdown complete');
+  }
+
+  // ============================================
+  // AWS BATCH: Auto-exit when idle
+  // ============================================
+  // When running as an AWS Batch job, the worker should
+  // exit when queue is empty to release the EC2 instance.
+  // This saves costs by only running compute when needed.
+  //
+  // Flow:
+  // 1. AWS Batch starts worker container
+  // 2. Worker processes all messages in queue
+  // 3. Queue becomes empty → idle timer starts
+  // 4. After IDLE_TIMEOUT_SECONDS of inactivity → exit
+  // 5. AWS Batch marks job as SUCCEEDED
+  // 6. If no more jobs in Batch queue → EC2 terminates
+  // ============================================
+  private async checkIdleAndExit(): Promise<void> {
+    if (this.isShuttingDown || this.currentJobCount > 0) return;
+
+    const idleTime = (Date.now() - this.lastJobCompletedAt) / 1000;
+
+    if (idleTime >= this.idleTimeoutSeconds) {
+      // Double-check: verify queue is actually empty
+      try {
+        if (this.channel) {
+          const queueInfo = await this.channel.checkQueue(this.queueName);
+          if (queueInfo.messageCount > 0) {
+            // Queue has messages, don't exit yet
+            console.log(`[BATCH] Queue still has ${queueInfo.messageCount} message(s), continuing...`);
+            this.lastJobCompletedAt = Date.now(); // Reset timer
+            return;
+          }
+        }
+      } catch (error) {
+        // If we can't check queue, exit anyway (safer for cost)
+        console.warn(`[BATCH] Could not check queue: ${error.message}`);
+      }
+
+      console.log('============================================');
+      console.log('  AWS BATCH: AUTO-EXIT (Queue Empty)');
+      console.log('============================================');
+      console.log(`  Idle time: ${idleTime.toFixed(0)}s`);
+      console.log(`  Threshold: ${this.idleTimeoutSeconds}s`);
+      console.log(`  Jobs processed: ${this.totalJobsProcessed}`);
+      console.log(`  Reason: No messages in queue`);
+      console.log(`  Action: Exiting to release EC2 instance`);
+      console.log('============================================');
+
+      // Clean shutdown
+      this.isShuttingDown = true;
+      if (this.idleCheckInterval) {
+        clearInterval(this.idleCheckInterval);
+      }
+
+      // Give 5 seconds for cleanup then exit
+      setTimeout(() => {
+        console.log('[BATCH] Worker exiting with code 0 (SUCCESS)');
+        process.exit(0);
+      }, 5000);
+    }
   }
 
   private async startWorker(): Promise<void> {
@@ -273,43 +390,63 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
 
         try {
           await this.processVideo(job);
-          channel.ack(msg);
+          // ============================================
+          // SAFE ACK: Handle channel closed gracefully
+          // ============================================
+          // RabbitMQ may close the channel if consumer_timeout is exceeded
+          // (e.g., video processing took >30min with default timeout).
+          // We must catch this to prevent crashing the entire worker.
+          // The video is already processed and saved to DB at this point,
+          // so the ack failure only means RabbitMQ will redeliver the message
+          // (but DB status=ready so it will be skipped or re-processed harmlessly).
+          // ============================================
+          try {
+            channel.ack(msg);
+          } catch (ackError) {
+            console.warn(`[WARN] Could not ack job ${job.videoId}: ${ackError.message}`);
+            console.warn(`   Video was processed successfully but RabbitMQ channel closed.`);
+            console.warn(`   This is likely due to consumer_timeout. Increase RABBITMQ consumer_timeout.`);
+          }
           const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-          console.log(`[?] Job ${job.videoId} completed in ${duration}s`);
+          console.log(`[✓] Job ${job.videoId} completed in ${duration}s`);
         } catch (error) {
           console.error(`[-] Failed to process job ${job.videoId}:`, error.message);
           
-          if (dlqEnabled) {
-            // Job chuyển vào DLQ để admin review
-            channel.nack(msg, false, false);
-            console.log(`[!] Job ${job.videoId} moved to Dead Letter Queue for manual review`);
-          } else {
-            // ============================================
-            // [WARN] FIX: Poison Pill Prevention
-            // ============================================
-            // KHÔNG requeue khi không có DLQ!
-            // Nếu video lỗi (file hỏng, codec không hỗ trợ...), requeue sẽ tạo
-            // infinite loop: Error -> Requeue -> Error -> Requeue...
-            // 
-            // Giải pháp: Ack message (xóa khỏi queue) và update DB = FAILED
-            // Video bị mất nhưng hệ thống không bị treo
-            // ============================================
-            channel.ack(msg); // Accept & remove from queue
-            console.error(`[!] Job ${job.videoId} FAILED and DISCARDED (no DLQ configured)`);
-            console.error(`    [WARN] WARNING: Video lost! Enable DLQ to prevent data loss.`);
-            
-            // Update DB status = FAILED
-            try {
-              await this.videoRepository.update(job.videoId, {
-                status: VideoStatus.FAILED,
-                errorMessage: `Processing failed: ${error.message}. Video discarded (no DLQ).`,
-              });
-            } catch (dbError) {
-              console.error(`    Could not update DB:`, dbError.message);
+          // ============================================
+          // SAFE NACK/ACK: Handle channel closed gracefully
+          // ============================================
+          try {
+            if (dlqEnabled) {
+              channel.nack(msg, false, false);
+              console.log(`[!] Job ${job.videoId} moved to Dead Letter Queue for manual review`);
+            } else {
+              channel.ack(msg);
+              console.error(`[!] Job ${job.videoId} FAILED and DISCARDED (no DLQ configured)`);
+              console.error(`    [WARN] WARNING: Video lost! Enable DLQ to prevent data loss.`);
             }
+          } catch (nackError) {
+            console.warn(`[WARN] Could not ack/nack job ${job.videoId}: ${nackError.message}`);
+            console.warn(`   Channel likely closed due to consumer_timeout.`);
+          }
+            
+          // Update DB status = FAILED
+          try {
+            await this.videoRepository.update(job.videoId, {
+              status: VideoStatus.FAILED,
+              errorMessage: `Processing failed: ${error.message}`,
+            });
+          } catch (dbError) {
+            console.error(`    Could not update DB:`, dbError.message);
           }
         } finally {
           this.currentJobCount--;
+          this.totalJobsProcessed++;
+          this.lastJobCompletedAt = Date.now();
+          
+          // Log batch progress
+          if (this.isBatchMode) {
+            console.log(`[BATCH] Jobs processed so far: ${this.totalJobsProcessed}`);
+          }
         }
       }
     }, { consumerTag: 'video-worker-consumer' });
@@ -357,7 +494,19 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
 
       // Check if input file exists
       if (!fs.existsSync(inputPath)) {
-        throw new Error(`Input file not found: ${inputPath}`);
+        // ============================================
+        // [S3 FALLBACK] Download from S3 if local file not found
+        // ============================================
+        // This happens when running as AWS Batch worker on a
+        // separate machine that doesn't have the local file.
+        // video-service syncs raw videos to S3 on upload.
+        // ============================================
+        console.log(`[S3-FALLBACK] Local file not found, attempting S3 download...`);
+        await this.ensureInputFileExists(inputPath, fileName);
+      }
+
+      if (!fs.existsSync(inputPath)) {
+        throw new Error(`Input file not found (local and S3): ${inputPath}`);
       }
 
       const stats = fs.statSync(inputPath);
@@ -443,11 +592,25 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       try {
         if (fs.existsSync(inputPath)) {
           fs.unlinkSync(inputPath);
-          console.log(`[OK] Raw video deleted: ${inputPath}`);
+          console.log(`[OK] Raw video deleted (local): ${inputPath}`);
         }
       } catch (deleteError) {
         // Log but don't fail - raw video deletion is not critical
-        console.warn(`[WARN] Could not delete raw video: ${deleteError.message}`);
+        console.warn(`[WARN] Could not delete raw video (local): ${deleteError.message}`);
+      }
+
+      // ============================================
+      // [S3 CLEANUP] Delete raw video from S3 after processing
+      // ============================================
+      // Raw video was synced to S3 by video-service for Batch workers.
+      // Now that processing is complete, delete it to save S3 costs.
+      // ============================================
+      try {
+        const rawS3Key = `raw_videos/${fileName}`;
+        console.log(`[S3-CLEANUP] Deleting raw video from S3: ${rawS3Key}`);
+        await this.storageService.deleteFile(rawS3Key);
+      } catch (s3DeleteError) {
+        console.warn(`[WARN] Could not delete raw video from S3: ${s3DeleteError.message}`);
       }
 
       // 8. Cập nhật database với aspect ratio và thumbnail
@@ -507,6 +670,48 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
         errorMessage: error.message || 'Unknown error',
       });
     }
+  }
+
+  // ============================================
+  // [S3 FALLBACK] Ensure input file exists
+  // ============================================
+  // If the raw video file is not found locally (AWS Batch worker),
+  // download it from S3 where video-service synced it on upload.
+  //
+  // Flow:
+  // 1. User uploads video → multer saves to EC2 disk
+  // 2. video-service syncs raw file to S3 (raw_videos/{filename})
+  // 3. RabbitMQ message sent → Batch worker picks it up
+  // 4. Batch worker can't find local file → downloads from S3
+  // 5. Processing continues as normal
+  //
+  // EC2 local worker: File exists locally → skip S3 download (fast!)
+  // Batch worker: File not local → download from S3 → process
+  // ============================================
+  private async ensureInputFileExists(inputPath: string, fileName: string): Promise<void> {
+    if (!this.storageService.isEnabled()) {
+      console.warn(`[S3-FALLBACK] S3 not configured, cannot download raw video`);
+      return;
+    }
+
+    const s3Key = `raw_videos/${fileName}`;
+    console.log(`[S3-FALLBACK] Checking S3 for: ${s3Key}`);
+
+    const exists = await this.storageService.fileExists(s3Key);
+    if (!exists) {
+      console.error(`[S3-FALLBACK] Raw video not found in S3 either: ${s3Key}`);
+      return;
+    }
+
+    // Ensure parent directory exists
+    const dir = path.dirname(inputPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    // Download from S3 to local path
+    await this.storageService.downloadFile(s3Key, inputPath);
+    console.log(`[S3-FALLBACK] [OK] Downloaded raw video from S3 to: ${inputPath}`);
   }
 
   private getVideoAspectRatio(inputPath: string): Promise<string> {

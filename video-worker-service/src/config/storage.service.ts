@@ -4,6 +4,8 @@ import {
   S3Client,
   PutObjectCommand,
   DeleteObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import * as fs from 'fs';
@@ -142,26 +144,43 @@ export class StorageService implements OnModuleInit {
     let hlsUrl = '';
     let thumbnailUrl = '';
 
-    // Create upload promises for parallel execution
-    const uploadPromises = allFiles.map(async (filePath) => {
-      // Get relative path from localDir for S3 key
+    // ============================================
+    // BATCHED PARALLEL UPLOAD (concurrency limit)
+    // ============================================
+    // Upload files in batches of BATCH_SIZE to avoid
+    // overwhelming Node.js socket pool (default 50).
+    // 266 files all at once causes:
+    //   "socket usage at capacity=50 and 148 additional requests are enqueued"
+    // Batching to 30 concurrent uploads avoids this issue
+    // while still being much faster than sequential upload.
+    // ============================================
+    const BATCH_SIZE = 30;
+    
+    // Prepare upload tasks with metadata
+    const uploadTasks = allFiles.map((filePath) => {
       const relativePath = path.relative(localDir, filePath).replace(/\\/g, '/');
       const s3Key = `${s3Prefix}/${relativePath}`;
-      
-      const result = await this.uploadFile(filePath, s3Key);
-
-      // ABR: master.m3u8 is the entry point (not playlist.m3u8)
-      if (relativePath === 'master.m3u8') {
-        hlsUrl = result.url;
-      } else if (relativePath === 'thumbnail.jpg') {
-        thumbnailUrl = result.url;
-      }
-      
-      return result;
+      return { filePath, s3Key, relativePath };
     });
 
-    // Execute all uploads in parallel
-    await Promise.all(uploadPromises);
+    // Process in batches
+    for (let i = 0; i < uploadTasks.length; i += BATCH_SIZE) {
+      const batch = uploadTasks.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(
+        batch.map(async (task) => {
+          const result = await this.uploadFile(task.filePath, task.s3Key);
+
+          // ABR: master.m3u8 is the entry point (not playlist.m3u8)
+          if (task.relativePath === 'master.m3u8') {
+            hlsUrl = result.url;
+          } else if (task.relativePath === 'thumbnail.jpg') {
+            thumbnailUrl = result.url;
+          }
+
+          return result;
+        }),
+      );
+    }
     
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     console.log(`[OK] [Worker] Uploaded ${allFiles.length} files to S3 in ${duration}s (parallel)`);
@@ -200,6 +219,95 @@ export class StorageService implements OnModuleInit {
     }
 
     return files;
+  }
+
+  // ============================================
+  // [S3 DOWNLOAD] Download raw video from S3
+  // ============================================
+  // Used by AWS Batch workers to download raw videos that
+  // were uploaded by video-service's S3 sync.
+  // EC2 local workers skip this (file already exists locally).
+  // ============================================
+  async downloadFile(s3Key: string, localPath: string): Promise<void> {
+    if (!this.isS3Enabled || !this.s3Client) {
+      throw new Error('S3 not enabled - cannot download file');
+    }
+
+    console.log(`[S3-DOWNLOAD] Downloading ${s3Key} → ${localPath}`);
+    const startTime = Date.now();
+
+    // Ensure parent directory exists
+    const dir = path.dirname(localPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    const response = await this.s3Client.send(
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: s3Key,
+      }),
+    );
+
+    // Stream the S3 object to local file
+    const body = response.Body as NodeJS.ReadableStream;
+    const writeStream = fs.createWriteStream(localPath);
+
+    await new Promise<void>((resolve, reject) => {
+      body.pipe(writeStream);
+      writeStream.on('finish', resolve);
+      writeStream.on('error', reject);
+      body.on('error', reject);
+    });
+
+    const fileSize = fs.statSync(localPath).size;
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log(`[S3-DOWNLOAD] [OK] Downloaded ${(fileSize / 1024 / 1024).toFixed(2)} MB in ${duration}s`);
+  }
+
+  // ============================================
+  // [S3 DELETE] Delete a file from S3
+  // ============================================
+  // Used to clean up raw videos from S3 after processing
+  // to save storage costs.
+  // ============================================
+  async deleteFile(s3Key: string): Promise<void> {
+    if (!this.isS3Enabled || !this.s3Client) {
+      return;
+    }
+
+    try {
+      await this.s3Client.send(
+        new DeleteObjectCommand({
+          Bucket: this.bucket,
+          Key: s3Key,
+        }),
+      );
+      console.log(`[S3-DELETE] [OK] Deleted from S3: ${s3Key}`);
+    } catch (error) {
+      console.warn(`[S3-DELETE] [WARN] Failed to delete ${s3Key}: ${error.message}`);
+    }
+  }
+
+  // ============================================
+  // [S3 CHECK] Check if file exists in S3
+  // ============================================
+  async fileExists(s3Key: string): Promise<boolean> {
+    if (!this.isS3Enabled || !this.s3Client) {
+      return false;
+    }
+
+    try {
+      await this.s3Client.send(
+        new HeadObjectCommand({
+          Bucket: this.bucket,
+          Key: s3Key,
+        }),
+      );
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**

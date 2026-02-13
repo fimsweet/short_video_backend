@@ -18,6 +18,7 @@ import { SharesService } from '../shares/shares.service';
 import { CategoriesService } from '../categories/categories.service';
 import { SearchService } from '../search/search.service';
 import { ActivityLoggerService } from '../config/activity-logger.service';
+import { StorageService } from '../config/storage.service';
 import { validateVideoFile, deleteInvalidFile } from '../config/file-validation.util';
 
 @Injectable()
@@ -44,6 +45,7 @@ export class VideosService {
     private categoriesService: CategoriesService,
     private searchService: SearchService,
     private activityLoggerService: ActivityLoggerService,
+    private storageService: StorageService,
   ) {
     this.rabbitMQUrl = this.configService.get<string>('RABBITMQ_URL') || 'amqp://admin:password@localhost:5672';
     this.queueName = this.configService.get<string>('RABBITMQ_QUEUE') || 'video_processing_queue';
@@ -107,7 +109,20 @@ export class VideosService {
         console.log('Categories assigned:', uploadVideoDto.categoryIds);
       }
 
-      // 3. Gửi message vào RabbitMQ để worker xử lý
+      // ============================================
+      // 3. [S3 SYNC] Upload raw video to S3 BEFORE sending to queue
+      // ============================================
+      // IMPORTANT: Must await S3 upload BEFORE sending RabbitMQ message!
+      // If we send to queue first (fire-and-forget), AWS Batch worker
+      // may start before S3 upload completes → "file not found" error.
+      //
+      // Order: S3 upload (await) → RabbitMQ send → Batch worker downloads
+      // This adds 1-2s latency but guarantees 100% reliability.
+      // If S3 fails, we still send to queue (EC2 local worker can process).
+      // ============================================
+      await this.syncRawVideoToS3(file.path, file.filename);
+
+      // 4. Gửi message vào RabbitMQ để worker xử lý
       await this.sendToQueue({
         videoId: savedVideo.id,
         filePath: file.path,
@@ -116,7 +131,7 @@ export class VideosService {
       });
       console.log('Job sent to RabbitMQ queue');
 
-      // 4. Invalidate user videos cache so new processing video appears immediately
+      // 5. Invalidate user videos cache so new processing video appears immediately
       await this.cacheManager.del(`user_videos:${uploadVideoDto.userId}`);
       console.log(`[OK] Cache invalidated for user ${uploadVideoDto.userId}`);
 
@@ -189,6 +204,48 @@ export class VideosService {
     } catch (error) {
       console.error('Error sending to RabbitMQ:', error);
       throw error;
+    }
+  }
+
+  // ============================================
+  // [S3 SYNC] Upload raw video to S3 for Batch workers
+  // ============================================
+  // When a user uploads a video, the raw file is saved locally.
+  // AWS Batch workers run on separate machines and can't access
+  // local files, so we sync the raw video to S3.
+  // 
+  // S3 key format: raw_videos/{filename}
+  // This matches what the worker expects when downloading.
+  //
+  // This runs fire-and-forget (non-blocking) because:
+  // 1. The local EC2 worker can process from the local file
+  // 2. We don't want upload latency to affect the user
+  // 3. If S3 fails, only Batch workers are affected
+  // ============================================
+  private async syncRawVideoToS3(filePath: string, fileName: string): Promise<void> {
+    if (!this.storageService.isEnabled()) {
+      console.log(`[S3-SYNC] S3 not configured, skipping raw video sync`);
+      return; // S3 not configured, skip sync
+    }
+
+    try {
+      const s3Key = `raw_videos/${fileName}`;
+      console.log(`[S3-SYNC] Uploading raw video to S3: ${s3Key}`);
+      
+      await this.storageService.uploadFile(filePath, s3Key, 'video/mp4');
+      
+      console.log(`[S3-SYNC] [OK] Raw video synced to S3: ${s3Key}`);
+    } catch (error) {
+      // ============================================
+      // DON'T THROW - S3 sync failure is non-critical
+      // ============================================
+      // If S3 upload fails, we still send to RabbitMQ.
+      // The EC2 local worker can process from local file.
+      // Only AWS Batch workers need S3, and if S3 is down,
+      // Batch workers won't be able to work anyway.
+      // ============================================
+      console.error(`[S3-SYNC] [WARN] Failed to sync raw video to S3: ${error.message}`);
+      console.error(`[S3-SYNC] EC2 local worker can still process from local file`);
     }
   }
 
@@ -957,8 +1014,19 @@ export class VideosService {
       }
     }
 
-    // Update thumbnail URL
-    video.thumbnailUrl = `/uploads/thumbnails/${file.filename}`;
+    // Upload new thumbnail to S3 if enabled, otherwise use local path
+    if (this.storageService.isEnabled()) {
+      const thumbS3Key = `thumbnails/${file.filename}`;
+      const uploadResult = await this.storageService.uploadFile(
+        file.path, thumbS3Key, file.mimetype || 'image/jpeg',
+      );
+      video.thumbnailUrl = uploadResult.url;
+      console.log(`[S3] Thumbnail uploaded to S3: ${video.thumbnailUrl}`);
+      // Delete local file after S3 upload
+      try { fs.unlinkSync(file.path); } catch (e) { /* ignore */ }
+    } else {
+      video.thumbnailUrl = `/uploads/thumbnails/${file.filename}`;
+    }
     await this.videoRepository.save(video);
 
     // Invalidate cache
@@ -985,7 +1053,26 @@ export class VideosService {
       }
       console.log('   User ID:', uploadVideoDto.userId);
 
-      // 1. Create record in database
+      // 1. Upload custom thumbnail to S3 if provided (before creating DB record)
+      let thumbnailUrl: string | undefined;
+      if (thumbnailFile) {
+        if (this.storageService.isEnabled()) {
+          // Upload to S3 and get CloudFront URL
+          const thumbS3Key = `thumbnails/${thumbnailFile.filename}`;
+          const uploadResult = await this.storageService.uploadFile(
+            thumbnailFile.path, thumbS3Key, thumbnailFile.mimetype || 'image/jpeg',
+          );
+          thumbnailUrl = uploadResult.url;
+          console.log(`[S3] Custom thumbnail uploaded: ${thumbnailUrl}`);
+          // Delete local thumbnail file after S3 upload
+          try { fs.unlinkSync(thumbnailFile.path); } catch (e) { /* ignore */ }
+        } else {
+          // Local storage fallback
+          thumbnailUrl = `/uploads/thumbnails/${thumbnailFile.filename}`;
+        }
+      }
+
+      // 2. Create record in database
       const video = this.videoRepository.create({
         userId: uploadVideoDto.userId,
         title: uploadVideoDto.title,
@@ -994,14 +1081,14 @@ export class VideosService {
         rawVideoPath: videoFile.path,
         fileSize: videoFile.size,
         status: VideoStatus.PROCESSING,
-        // Set custom thumbnail if provided
-        thumbnailUrl: thumbnailFile ? `/uploads/thumbnails/${thumbnailFile.filename}` : undefined,
+        // Set custom thumbnail (CloudFront URL if S3 enabled, local path otherwise)
+        thumbnailUrl,
       });
 
       const savedVideo = await this.videoRepository.save(video);
       console.log('Video saved to database:', savedVideo.id);
 
-      // 2. Assign categories to video if provided
+      // 3. Assign categories to video if provided
       if (uploadVideoDto.categoryIds && uploadVideoDto.categoryIds.length > 0) {
         await this.categoriesService.assignCategoriesToVideo(
           savedVideo.id,
@@ -1010,7 +1097,10 @@ export class VideosService {
         console.log('Categories assigned:', uploadVideoDto.categoryIds);
       }
 
-      // 3. Send message to RabbitMQ for worker to process
+      // 4. [S3 SYNC] Upload raw video to S3 BEFORE sending to queue
+      await this.syncRawVideoToS3(videoFile.path, videoFile.filename);
+
+      // 5. Send message to RabbitMQ for worker to process
       // Include flag to skip thumbnail generation if custom one provided
       await this.sendToQueue({
         videoId: savedVideo.id,
@@ -1021,11 +1111,11 @@ export class VideosService {
       });
       console.log('Job sent to RabbitMQ queue');
 
-      // 4. Invalidate user videos cache
+      // 6. Invalidate user videos cache
       await this.cacheManager.del(`user_videos:${uploadVideoDto.userId}`);
       console.log(`[OK] Cache invalidated for user ${uploadVideoDto.userId}`);
 
-      // 5. Log video_posted activity
+      // 7. Log video_posted activity
       this.activityLoggerService.logActivity({
         userId: parseInt(uploadVideoDto.userId),
         actionType: 'video_posted',

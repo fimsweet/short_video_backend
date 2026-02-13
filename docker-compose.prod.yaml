@@ -60,6 +60,16 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: user
       RABBITMQ_DEFAULT_PASS: password
+      # ============================================
+      # CONSUMER TIMEOUT: 2 hours (default = 30 min)
+      # ============================================
+      # Video processing (especially long videos with ABR 3 qualities)
+      # can take >30 minutes. RabbitMQ default consumer_timeout=1800000ms
+      # closes the channel if a message isn't acked within 30 min.
+      # This causes "PRECONDITION_FAILED - delivery acknowledgement timed out"
+      # Set to 2 hours (7200000ms) to handle even the longest videos.
+      # ============================================
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit consumer_timeout 7200000"
     volumes:
       # BIND MOUNT: Lưu vào ổ 100GB
       - /data/rabbitmq:/var/lib/rabbitmq
@@ -140,6 +150,12 @@ services:
       - RABBITMQ_URL=amqp://user:password@rabbitmq:5672
       - ELASTICSEARCH_NODE=http://elasticsearch:9200
       - USER_SERVICE_URL=http://user-service:3000
+      # ============================================
+      # AWS BATCH AUTO-SCALING CONFIG
+      # ============================================
+      # Đọc từ video-service/.env (env_file ở trên)
+      # Không cần khai báo ở đây vì env_file đã load
+      # ============================================
     volumes:
       # BIND MOUNT: Video uploads lưu vào ổ 100GB
       - /data/uploads:/app/uploads
@@ -174,7 +190,10 @@ services:
       - UPLOAD_ROOT_PATH=/app
       - RAW_VIDEOS_PATH=uploads/raw_videos
       - PROCESSED_VIDEOS_PATH=uploads/processed_videos
-      - WORKER_CONCURRENCY=2
+      # LOCAL WORKER: prefetch=1 (process 1 video at a time)
+      # EC2 t3.large has limited CPU/RAM, processing 1 video is more stable.
+      # Excess videos in queue will be dispatched to AWS Batch workers.
+      - WORKER_CONCURRENCY=1
     volumes:
       # BIND MOUNT: Dùng CÙNG thư mục với video-service
       - /data/uploads:/app/uploads
