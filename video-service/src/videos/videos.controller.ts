@@ -57,11 +57,13 @@ export class VideosController {
   }
 
   @Get('user/:userId')
-  async getUserVideos(@Param('userId') userId: string) {
-    const videos = await this.videosService.getVideosByUserId(userId);
+  async getUserVideos(@Param('userId') userId: string, @Query('requesterId') requesterId?: string) {
+    const result = await this.videosService.getVideosByUserId(userId, requesterId);
     return {
       success: true,
-      data: videos,
+      data: result.videos,
+      privacyRestricted: result.privacyRestricted || false,
+      reason: result.reason,
     };
   }
 
@@ -246,6 +248,26 @@ export class VideosController {
     return {
       success: true,
       message: 'Cache invalidated for video processing completion',
+    };
+  }
+
+  // Retry a failed video processing job
+  @Post(':id/retry')
+  @HttpCode(HttpStatus.OK)
+  async retryVideo(
+    @Param('id') id: string,
+    @Body('userId') userId: string,
+  ) {
+    if (!userId) {
+      throw new BadRequestException('userId is required');
+    }
+
+    const result = await this.videosService.retryFailedVideo(id, userId);
+    return {
+      success: true,
+      message: 'Video has been re-queued for processing',
+      videoId: result.id,
+      status: result.status,
     };
   }
 

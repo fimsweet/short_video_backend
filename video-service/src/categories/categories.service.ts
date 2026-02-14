@@ -105,6 +105,50 @@ export class CategoriesService implements OnModuleInit {
       .filter(c => c && c.isActive);
   }
 
+  // Get categories for a video with AI suggestion info
+  async getVideoCategoriesWithAiInfo(videoId: string): Promise<{ category: Category; isAiSuggested: boolean }[]> {
+    const videoCategories = await this.videoCategoryRepository.find({
+      where: { videoId },
+      relations: ['category'],
+    });
+    
+    return videoCategories
+      .filter(vc => vc.category && vc.category.isActive)
+      .map(vc => ({
+        category: vc.category,
+        isAiSuggested: vc.isAiSuggested ?? false,
+      }));
+  }
+
+  // Add AI-suggested categories to a video (union merge - does NOT remove existing user-selected)
+  async addAiCategoriesToVideo(videoId: string, categoryIds: number[]): Promise<VideoCategory[]> {
+    // Get existing categories for this video
+    const existing = await this.videoCategoryRepository.find({ where: { videoId } });
+    const existingCategoryIds = new Set(existing.map(vc => vc.categoryId));
+
+    // Only add new ones (skip duplicates)
+    const newCategoryIds = categoryIds.filter(id => !existingCategoryIds.has(id));
+    
+    if (newCategoryIds.length === 0) {
+      console.log(`[AI-CAT] No new AI categories to add for video ${videoId}`);
+      return [];
+    }
+
+    const added: VideoCategory[] = [];
+    for (const categoryId of newCategoryIds) {
+      const vc = this.videoCategoryRepository.create({
+        videoId,
+        categoryId,
+        isAiSuggested: true,
+      });
+      const saved = await this.videoCategoryRepository.save(vc);
+      added.push(saved);
+    }
+
+    console.log(`[AI-CAT] Added ${added.length} AI categories to video ${videoId}: [${newCategoryIds.join(', ')}]`);
+    return added;
+  }
+
   // Get video IDs by category
   async getVideoIdsByCategory(categoryId: number, limit: number = 100): Promise<string[]> {
     const videoCategories = await this.videoCategoryRepository.find({
@@ -150,7 +194,7 @@ export class CategoriesService implements OnModuleInit {
   }
 
   // Get categories for multiple videos (bulk query for performance)
-  async getVideoCategoriesBulk(videoIds: string[]): Promise<Map<string, { categoryId: number; categoryName: string }[]>> {
+  async getVideoCategoriesBulk(videoIds: string[]): Promise<Map<string, { categoryId: number; categoryName: string; isAiSuggested: boolean }[]>> {
     if (videoIds.length === 0) {
       return new Map();
     }
@@ -160,7 +204,7 @@ export class CategoriesService implements OnModuleInit {
       relations: ['category'],
     });
 
-    const result = new Map<string, { categoryId: number; categoryName: string }[]>();
+    const result = new Map<string, { categoryId: number; categoryName: string; isAiSuggested: boolean }[]>();
     
     for (const vc of videoCategories) {
       if (!vc.category || !vc.category.isActive) continue;
@@ -169,6 +213,7 @@ export class CategoriesService implements OnModuleInit {
       categories.push({
         categoryId: vc.categoryId,
         categoryName: vc.category.displayName,
+        isAiSuggested: vc.isAiSuggested ?? false,
       });
       result.set(vc.videoId, categories);
     }

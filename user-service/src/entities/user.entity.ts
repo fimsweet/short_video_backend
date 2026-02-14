@@ -63,7 +63,9 @@ export class User {
 
   @Column({ type: 'datetime', nullable: true })
   deactivatedAt: Date | null;
-
+  // Display name change tracking (like TikTok - can only change every 7 days)
+  @Column({ type: 'datetime', nullable: true })
+  displayNameLastChangedAt: Date | null;
   // Username change tracking (like TikTok - can only change once every 30 days)
   @Column({ type: 'datetime', nullable: true })
   usernameLastChangedAt: Date | null;

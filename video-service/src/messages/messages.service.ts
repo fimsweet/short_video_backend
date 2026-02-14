@@ -28,12 +28,16 @@ export class MessagesService {
     senderId: string, 
     recipientId: string, 
     content: string,
-    replyTo?: { id: string; content: string; senderId: string }
+    replyTo?: { id: string; content: string; senderId: string },
+    senderName?: string,
   ): Promise<Message> {
     // Check if sender is allowed to message recipient
     const canMessage = await this.privacyService.canSendMessage(senderId, recipientId);
     if (!canMessage.allowed) {
-      throw new ForbiddenException(canMessage.reason || 'Bạn không được phép gửi tin nhắn cho người này');
+      const reason = (canMessage as any).isDeactivated
+        ? 'Tài khoản này đã bị vô hiệu hóa, không thể gửi tin nhắn'
+        : (canMessage.reason || 'Bạn không được phép gửi tin nhắn cho người này');
+      throw new ForbiddenException(reason);
     }
 
     const conversationId = this.getConversationId(senderId, recipientId);
@@ -74,11 +78,21 @@ export class MessagesService {
     const savedMessage = await this.messageRepository.save(message);
 
     // Send push notification for new message
+    // Check if recipient has set a nickname for the sender
+    let displayName = senderName || `User ${senderId}`;
+    if (conversation) {
+      const isRecipientParticipant1 = conversation.participant1Id === recipientId;
+      const nickname = isRecipientParticipant1 ? conversation.nicknameBy1 : conversation.nicknameBy2;
+      if (nickname) {
+        displayName = nickname;
+      }
+    }
     this.pushNotificationService.sendMessageNotification(
       recipientId,
-      senderId, // Will be replaced with actual sender name in real usage
+      displayName,
       content,
       conversationId,
+      senderId,
     );
 
     return savedMessage;
@@ -139,11 +153,43 @@ export class MessagesService {
         const unreadCount = await this.messageRepository.count({
           where: { conversationId: conv.id, recipientId: userId, isRead: false },
         });
+
+        // Fetch the actual latest visible message for this user
+        // Skip messages deleted for this user (deletedForUserIds contains userId)
+        const recentMessages = await this.messageRepository
+          .createQueryBuilder('m')
+          .where('m.conversationId = :conversationId', { conversationId: conv.id })
+          .orderBy('m.createdAt', 'DESC')
+          .take(20) // fetch a batch to find first visible one
+          .getMany();
+
+        let lastMessage = conv.lastMessage;
+        let lastMessageSenderId = conv.lastMessageSenderId;
+        let isLastMessageUnsent = false;
+
+        // Find the first message not deleted for this user
+        const latestVisibleMessage = recentMessages.find(msg => {
+          const deletedFor = msg.deletedForUserIds || [];
+          return !deletedFor.includes(userId);
+        });
+
+        if (latestVisibleMessage) {
+          if (latestVisibleMessage.isDeletedForEveryone) {
+            isLastMessageUnsent = true;
+            lastMessage = '';
+            lastMessageSenderId = latestVisibleMessage.senderId;
+          } else {
+            lastMessage = latestVisibleMessage.content;
+            lastMessageSenderId = latestVisibleMessage.senderId;
+          }
+        }
+
         return { 
           id: conv.id, 
           otherUserId, 
-          lastMessage: conv.lastMessage, 
-          lastMessageSenderId: conv.lastMessageSenderId, 
+          lastMessage,
+          lastMessageSenderId,
+          isLastMessageUnsent,
           updatedAt: conv.updatedAt ? new Date(conv.updatedAt).toISOString() : null, 
           unreadCount 
         };
@@ -231,10 +277,12 @@ export class MessagesService {
     }
 
     if (settings.nickname !== undefined) {
+      // Treat empty string as clearing the nickname
+      const nicknameValue = settings.nickname === '' ? null : settings.nickname;
       if (isParticipant1) {
-        conversation.nicknameBy1 = settings.nickname;
+        conversation.nicknameBy1 = nicknameValue;
       } else {
-        conversation.nicknameBy2 = settings.nickname;
+        conversation.nicknameBy2 = nicknameValue;
       }
     }
 
@@ -383,6 +431,13 @@ export class MessagesService {
   private readonly UNSEND_TIME_LIMIT_MS = 10 * 60 * 1000; // 10 minutes
 
   /**
+   * Get a single message by ID
+   */
+  async getMessageById(messageId: string): Promise<Message | null> {
+    return this.messageRepository.findOne({ where: { id: messageId } });
+  }
+
+  /**
    * Delete message for the current user only
    * The message will still be visible to other participants
    */
@@ -450,6 +505,29 @@ export class MessagesService {
     
     await this.messageRepository.save(message);
 
+    // Update conversation lastMessage if this was the latest message
+    const conversationId = this.getConversationId(message.senderId, message.recipientId);
+    const conversation = await this.conversationRepository.findOne({ where: { id: conversationId } });
+    if (conversation) {
+      // Find the latest non-deleted message for the conversation preview
+      const latestMessage = await this.messageRepository
+        .createQueryBuilder('m')
+        .where('m.conversationId = :conversationId', { conversationId })
+        .andWhere('m.isDeletedForEveryone = false')
+        .orderBy('m.createdAt', 'DESC')
+        .getOne();
+      
+      if (latestMessage) {
+        conversation.lastMessage = latestMessage.content;
+        conversation.lastMessageSenderId = latestMessage.senderId;
+      } else {
+        // All messages deleted
+        conversation.lastMessage = '';
+        conversation.lastMessageSenderId = '';
+      }
+      await this.conversationRepository.save(conversation);
+    }
+
     return { success: true };
   }
 
@@ -471,6 +549,67 @@ export class MessagesService {
     const messageAge = Date.now() - new Date(message.createdAt).getTime();
     const remaining = this.UNSEND_TIME_LIMIT_MS - messageAge;
     return Math.max(0, Math.floor(remaining / 1000));
+  }
+
+  // ========== MESSAGE EDITING ==========
+
+  // Time limit for editing messages (15 minutes)
+  private readonly EDIT_TIME_LIMIT_MS = 15 * 60 * 1000;
+
+  /**
+   * Edit a message — only sender, within time limit, text messages only
+   */
+  async editMessage(messageId: string, userId: string, newContent: string): Promise<{ success: boolean; message?: string; editedMessage?: any }> {
+    const message = await this.messageRepository.findOne({ where: { id: messageId } });
+    if (!message) throw new NotFoundException('Message not found');
+    if (message.senderId !== userId) throw new ForbiddenException('Only the sender can edit messages');
+    if (message.isDeletedForEveryone) return { success: false, message: 'Cannot edit a deleted message' };
+
+    // Check time limit
+    const messageAge = Date.now() - new Date(message.createdAt).getTime();
+    if (messageAge > this.EDIT_TIME_LIMIT_MS) {
+      return { success: false, message: 'Cannot edit message after 15 minutes' };
+    }
+
+    // Don't allow editing image/video/sticker messages
+    if (message.content.startsWith('[IMAGE:') || message.content.startsWith('[VIDEO_SHARE:') || 
+        message.content.startsWith('[STACKED_IMAGE:') || message.content.startsWith('[STICKER:') ||
+        message.content.startsWith('[VOICE:')) {
+      return { success: false, message: 'Cannot edit non-text messages' };
+    }
+
+    // Save original content on first edit
+    if (!message.isEdited) {
+      message.originalContent = message.content;
+    }
+
+    message.content = newContent.trim();
+    message.isEdited = true;
+    message.editedAt = new Date();
+    await this.messageRepository.save(message);
+
+    return {
+      success: true,
+      editedMessage: {
+        id: message.id,
+        content: message.content,
+        isEdited: true,
+        editedAt: message.editedAt instanceof Date ? message.editedAt.toISOString() : message.editedAt,
+        senderId: message.senderId,
+        recipientId: message.recipientId,
+        conversationId: message.conversationId,
+      },
+    };
+  }
+
+  /**
+   * Check if a message can still be edited
+   */
+  canEditMessage(message: Message, userId: string): boolean {
+    if (message.senderId !== userId) return false;
+    if (message.isDeletedForEveryone) return false;
+    const messageAge = Date.now() - new Date(message.createdAt).getTime();
+    return messageAge <= this.EDIT_TIME_LIMIT_MS;
   }
 
   /**
@@ -498,7 +637,16 @@ export class MessagesService {
               {
                 parts: [
                   {
-                    text: `Translate the following text to ${targetLang}. If the text is already in ${targetLang}, return it exactly as is. Only return the translated text, nothing else:\n\n${text}`,
+                    text: `You are a translator. Translate the following text to ${targetLang}.
+
+Rules:
+1. If the text is already in ${targetLang}, return it exactly as is.
+2. If the text is gibberish, random characters, meaningless strings, slang abbreviations without clear meaning (e.g. "dzzz", "asdf", "haha", "lol", "hmm"), or cannot be meaningfully translated, return the original text exactly as is.
+3. Only translate text that has clear semantic meaning in a recognizable language.
+4. Only return the translated text, nothing else. No explanations.
+
+Text to translate:
+${text}`,
                   },
                 ],
               },

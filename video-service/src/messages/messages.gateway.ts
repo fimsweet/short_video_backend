@@ -89,13 +89,17 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     return { success: true };
   }
 
-  // Broadcast user online/offline status to all connected clients
+  // Broadcast user online/offline status to subscribers and globally
   private broadcastOnlineStatus(userId: string, isOnline: boolean) {
-    this.server.emit('userOnlineStatus', {
+    const payload = {
       userId,
       isOnline,
       timestamp: new Date().toISOString(),
-    });
+    };
+    // Emit to subscribers of this user's online status
+    this.server.to(`online_status_${userId}`).emit('userOnlineStatus', payload);
+    // Also emit globally for inbox screen
+    this.server.emit('userOnlineStatus', payload);
   }
 
   // Get online status of a specific user
@@ -157,11 +161,11 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   @SubscribeMessage('sendMessage')
-  async handleMessage(@MessageBody() data: { senderId: string; recipientId: string; content: string }) {
+  async handleMessage(@MessageBody() data: { senderId: string; recipientId: string; content: string; senderName?: string }) {
     console.log(`Message from ${data.senderId} to ${data.recipientId}: ${data.content}`);
 
     try {
-      const message = await this.messagesService.createMessage(data.senderId, data.recipientId, data.content);
+      const message = await this.messagesService.createMessage(data.senderId, data.recipientId, data.content, undefined, data.senderName);
       const messageData = {
         id: message.id,
         senderId: message.senderId,
@@ -207,5 +211,76 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       isTyping: data.isTyping,
     });
     return { success: true };
+  }
+
+  // ========== MESSAGE DELETION (Real-time) ==========
+
+  @SubscribeMessage('unsendMessage')
+  async handleUnsendMessage(@MessageBody() data: { messageId: string; userId: string }) {
+    try {
+      const result = await this.messagesService.deleteForEveryone(data.messageId, data.userId);
+      if (result.success) {
+        // Notify both sender and recipient in real-time
+        // Find the message to get recipientId
+        const message = await this.messagesService.getMessageById(data.messageId);
+        if (message) {
+          const otherUserId = message.senderId === data.userId ? message.recipientId : message.senderId;
+          // Emit to the other user
+          this.server.to(`user_${otherUserId}`).emit('messageUnsent', {
+            messageId: data.messageId,
+            unsendBy: data.userId,
+          });
+          // Confirm to sender
+          this.server.to(`user_${data.userId}`).emit('messageUnsent', {
+            messageId: data.messageId,
+            unsendBy: data.userId,
+          });
+        }
+      }
+      return result;
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  // ========== MESSAGE EDITING (Real-time) ==========
+
+  @SubscribeMessage('editMessage')
+  async handleEditMessage(@MessageBody() data: { messageId: string; userId: string; content: string }) {
+    try {
+      const result = await this.messagesService.editMessage(data.messageId, data.userId, data.content);
+      if (result.success && result.editedMessage) {
+        const otherUserId = result.editedMessage.senderId === data.userId 
+          ? result.editedMessage.recipientId 
+          : result.editedMessage.senderId;
+        // Notify recipient
+        this.server.to(`user_${otherUserId}`).emit('messageEdited', result.editedMessage);
+        // Confirm to sender
+        this.server.to(`user_${data.userId}`).emit('messageEdited', result.editedMessage);
+      }
+      return result;
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  // ========== PUBLIC METHOD FOR HTTP CONTROLLER ==========
+
+  /**
+   * Emit newMessage/messageSent events from HTTP controller
+   * Called when messages are created via REST API instead of WebSocket
+   */
+  emitNewMessage(recipientId: string, senderId: string, messageData: any) {
+    this.server.to(`user_${recipientId}`).emit('newMessage', messageData);
+    this.server.to(`user_${senderId}`).emit('messageSent', messageData);
+  }
+
+  /**
+   * Emit messageEdited events from HTTP controller
+   * Called when messages are edited via REST API instead of WebSocket
+   */
+  emitMessageEdited(recipientId: string, senderId: string, editedMessage: any) {
+    this.server.to(`user_${recipientId}`).emit('messageEdited', editedMessage);
+    this.server.to(`user_${senderId}`).emit('messageEdited', editedMessage);
   }
 }

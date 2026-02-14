@@ -30,6 +30,44 @@ export class UserSettings {
   @Column({ default: true })
   loginAlertsEnabled: boolean; // Push notifications for new login events
 
+  // Push notification preferences (granular)
+  @Column({ default: true })
+  pushLikes: boolean;
+
+  @Column({ default: true })
+  pushComments: boolean;
+
+  @Column({ default: true })
+  pushNewFollowers: boolean;
+
+  @Column({ default: true })
+  pushMentions: boolean;
+
+  @Column({ default: true })
+  pushMessages: boolean;
+
+  @Column({ default: true })
+  pushProfileViews: boolean;
+
+  // In-app notification preferences (granular)
+  @Column({ default: true })
+  inAppLikes: boolean;
+
+  @Column({ default: true })
+  inAppComments: boolean;
+
+  @Column({ default: true })
+  inAppNewFollowers: boolean;
+
+  @Column({ default: true })
+  inAppMentions: boolean;
+
+  @Column({ default: true })
+  inAppMessages: boolean;
+
+  @Column({ default: true })
+  inAppProfileViews: boolean;
+
   // Privacy settings
   @Column({ default: 'public', length: 50 })
   accountPrivacy: string; // 'public', 'private', 'friends'

@@ -7,7 +7,7 @@ import type { Cache } from 'cache-manager';
 import * as amqp from 'amqplib';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Video, VideoStatus } from '../entities/video.entity';
+import { Video, VideoStatus, VideoVisibility } from '../entities/video.entity';
 import { UploadVideoDto } from './dto/upload-video.dto';
 import { LikesService } from '../likes/likes.service';
 import { CommentsService } from '../comments/comments.service';
@@ -19,6 +19,7 @@ import { CategoriesService } from '../categories/categories.service';
 import { SearchService } from '../search/search.service';
 import { ActivityLoggerService } from '../config/activity-logger.service';
 import { StorageService } from '../config/storage.service';
+import { PrivacyService } from '../config/privacy.service';
 import { validateVideoFile, deleteInvalidFile } from '../config/file-validation.util';
 
 @Injectable()
@@ -46,9 +47,18 @@ export class VideosService {
     private searchService: SearchService,
     private activityLoggerService: ActivityLoggerService,
     private storageService: StorageService,
+    private privacyService: PrivacyService,
   ) {
     this.rabbitMQUrl = this.configService.get<string>('RABBITMQ_URL') || 'amqp://admin:password@localhost:5672';
     this.queueName = this.configService.get<string>('RABBITMQ_QUEUE') || 'video_processing_queue';
+  }
+
+  // Helper: Invalidate all user video cache variants (with and without requesterId)
+  private async invalidateUserVideosCache(userId: string): Promise<void> {
+    await Promise.all([
+      this.cacheManager.del(`user_videos:${userId}`),
+      this.cacheManager.del(`user_videos:${userId}:self`),
+    ]);
   }
 
   async uploadVideo(
@@ -95,6 +105,8 @@ export class VideosService {
         rawVideoPath: file.path,
         fileSize: file.size,
         status: VideoStatus.PROCESSING,
+        visibility: uploadVideoDto.visibility || VideoVisibility.PUBLIC,
+        allowComments: uploadVideoDto.allowComments !== undefined ? uploadVideoDto.allowComments : true,
       });
 
       const savedVideo = await this.videoRepository.save(video);
@@ -132,7 +144,7 @@ export class VideosService {
       console.log('Job sent to RabbitMQ queue');
 
       // 5. Invalidate user videos cache so new processing video appears immediately
-      await this.cacheManager.del(`user_videos:${uploadVideoDto.userId}`);
+      await this.invalidateUserVideosCache(uploadVideoDto.userId);
       console.log(`[OK] Cache invalidated for user ${uploadVideoDto.userId}`);
 
       // 5. Log video_posted activity
@@ -157,11 +169,66 @@ export class VideosService {
 
     // Invalidate all relevant caches
     await this.cacheManager.del(`video:${videoId}`);
-    await this.cacheManager.del(`user_videos:${userId}`);
+    await this.invalidateUserVideosCache(userId);
     await this.cacheManager.del('all_videos:50');
     await this.cacheManager.del('all_videos:100');
 
     console.log(`[OK] Cache invalidated for video ${videoId}`);
+  }
+
+  // ============================================
+  // [RETRY] Retry a failed video processing job
+  // ============================================
+  // Resets status from FAILED → PROCESSING and re-queues to RabbitMQ.
+  // The raw video file is preserved on failure (worker keeps it),
+  // and for S3-enabled setups, the raw file was already synced to S3 on upload.
+  // ============================================
+  async retryFailedVideo(videoId: string, userId: string): Promise<Video> {
+    const video = await this.videoRepository.findOne({ where: { id: videoId } });
+
+    if (!video) {
+      throw new BadRequestException('Video not found');
+    }
+
+    if (video.userId !== userId) {
+      throw new BadRequestException('You can only retry your own videos');
+    }
+
+    if (video.status !== VideoStatus.FAILED) {
+      throw new BadRequestException(`Cannot retry video with status "${video.status}". Only failed videos can be retried.`);
+    }
+
+    console.log(`[RETRY] Retrying failed video: ${videoId}`);
+    console.log(`   Raw video path: ${video.rawVideoPath}`);
+    console.log(`   Original file: ${video.originalFileName}`);
+    console.log(`   Error was: ${video.errorMessage}`);
+
+    // Reset status to PROCESSING and clear error/old URLs
+    await this.videoRepository.update(videoId, {
+      status: VideoStatus.PROCESSING,
+      errorMessage: null as any,
+      hlsUrl: null as any,
+      thumbnailUrl: null as any,
+    });
+    const updatedVideo = await this.videoRepository.findOne({ where: { id: videoId } });
+    if (!updatedVideo) {
+      throw new BadRequestException('Failed to reload video after retry');
+    }
+
+    // Re-queue to RabbitMQ for processing
+    const fileName = path.basename(video.rawVideoPath);
+    await this.sendToQueue({
+      videoId: video.id,
+      filePath: video.rawVideoPath,
+      fileName: fileName,
+    });
+
+    // Invalidate caches so frontend sees updated status
+    await this.cacheManager.del(`video:${videoId}`);
+    await this.invalidateUserVideosCache(userId);
+
+    console.log(`[OK] Video ${videoId} re-queued for processing`);
+    return updatedVideo;
   }
 
   private async sendToQueue(message: any): Promise<void> {
@@ -307,43 +374,72 @@ export class VideosService {
     return video;
   }
 
-  async getVideosByUserId(userId: string): Promise<any[]> {
+  async getVideosByUserId(userId: string, requesterId?: string): Promise<{ videos: any[], privacyRestricted?: boolean, reason?: string }> {
     try {
       // [OK] Check cache first
-      const cacheKey = `user_videos:${userId}`;
+      const cacheKey = `user_videos:${userId}:${requesterId || 'self'}`;
       const cachedVideos = await this.cacheManager.get(cacheKey);
 
       if (cachedVideos) {
         console.log(`[OK] Cache HIT for user ${userId} videos`);
-        return cachedVideos as any[];
+        return cachedVideos as any;
       }
 
       console.log(`[WARN] Cache MISS for user ${userId} videos - fetching from DB`);
-      console.log(`?? Fetching videos for user ${userId}...`);
+      console.log(`📺 Fetching videos for user ${userId} (requesterId: ${requesterId || 'self'})...`);
+
+      // If requester is not the owner, check user-level privacy first
+      const isOwner = !requesterId || requesterId === userId;
+
+      // [PRIVACY] Check user-level privacy settings before fetching videos
+      if (!isOwner) {
+        const privacyCheck = await this.privacyService.canViewVideo(requesterId, userId);
+        if (!privacyCheck.allowed) {
+          console.log(`[PRIVACY] User ${requesterId} cannot view videos of user ${userId}: ${privacyCheck.reason}`);
+          const result = { videos: [], privacyRestricted: true, reason: privacyCheck.reason };
+          await this.cacheManager.set(cacheKey, result, 60000); // Cache for 1 min
+          return result;
+        }
+      }
 
       const videos = await this.videoRepository.find({
-        where: {
-          userId,
-        },
+        where: { userId },
         order: { createdAt: 'DESC' },
       });
 
       console.log(`[OK] Found ${videos.length} videos for user ${userId}`);
 
+      // Filter by visibility based on relationship
+      let filteredVideos = videos;
+      if (!isOwner) {
+        let isFriend = false;
+        try {
+          const userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3000';
+          const mutualResponse = await firstValueFrom(
+            this.httpService.get(`${userServiceUrl}/follows/check-mutual/${requesterId}/${userId}`)
+          );
+          isFriend = mutualResponse.data?.isMutual === true;
+        } catch (e) {
+          console.error('[ERROR] Error checking mutual follow:', e);
+        }
+
+        if (isFriend) {
+          filteredVideos = videos.filter(v => 
+            v.visibility === VideoVisibility.PUBLIC || v.visibility === VideoVisibility.FRIENDS
+          );
+        } else {
+          filteredVideos = videos.filter(v => v.visibility === VideoVisibility.PUBLIC);
+        }
+        console.log(`[OK] Filtered to ${filteredVideos.length} visible videos for requester ${requesterId}`);
+      }
+
       // Add like and comment counts
       const videosWithCounts = await Promise.all(
-        videos.map(async (video) => {
+        filteredVideos.map(async (video) => {
           const likeCount = await this.likesService.getLikeCount(video.id);
           const commentCount = await this.commentsService.getCommentCount(video.id);
           const saveCount = await this.savedVideosService.getSaveCount(video.id);
           const shareCount = await this.sharesService.getShareCount(video.id);
-
-          // Log video info including isHidden
-          console.log(`   Video ${video.id}:`);
-          console.log(`     thumbnailUrl: ${video.thumbnailUrl}`);
-          console.log(`     hlsUrl: ${video.hlsUrl}`);
-          console.log(`     isHidden: ${video.isHidden}`);
-          console.log(`     status: ${video.status}`);
 
           return {
             id: video.id,
@@ -351,24 +447,37 @@ export class VideosService {
             title: video.title,
             description: video.description,
             hlsUrl: video.hlsUrl,
-            thumbnailUrl: video.thumbnailUrl, // Make sure this is included
+            thumbnailUrl: video.thumbnailUrl,
             aspectRatio: video.aspectRatio,
             status: video.status,
-            isHidden: video.isHidden || false, // Include isHidden flag
+            isHidden: video.isHidden || false,
+            visibility: video.visibility || 'public',
+            allowComments: video.allowComments !== false,
+            allowDuet: video.allowDuet !== false,
             createdAt: video.createdAt,
             likeCount,
             commentCount,
             saveCount,
             shareCount,
-            viewCount: video.viewCount || 0, // Use actual view count from database
+            viewCount: video.viewCount || 0,
           };
         }),
       );
 
-      // [OK] Store in cache for 2 minutes (user videos change less frequently)
-      await this.cacheManager.set(cacheKey, videosWithCounts, 120000);
+      // [OK] Store in cache — but SKIP caching if there are processing/failed videos
+      // so the grid always gets fresh DB data and shows status changes immediately
+      const result = { videos: videosWithCounts };
+      const hasProcessingVideos = videosWithCounts.some(
+        v => v.status === 'processing' || v.status === 'failed',
+      );
 
-      return videosWithCounts;
+      if (hasProcessingVideos) {
+        console.log(`[CACHE] Skipping cache — ${videosWithCounts.filter(v => v.status !== 'ready').length} video(s) still processing/failed`);
+      } else {
+        await this.cacheManager.set(cacheKey, result, 120000); // 2 minutes
+      }
+
+      return result;
     } catch (error) {
       console.error('[ERROR] Error in getVideosByUserId:', error);
       throw error;
@@ -419,6 +528,7 @@ export class VideosService {
         .createQueryBuilder('video')
         .where('video.status = :status', { status: VideoStatus.READY })
         .andWhere('video.isHidden = :isHidden', { isHidden: false })
+        .andWhere('video.visibility = :visibility', { visibility: VideoVisibility.PUBLIC })
         .andWhere('(LOWER(video.title) LIKE :search OR LOWER(video.description) LIKE :search)', { search: searchTerm })
         .orderBy('video.createdAt', 'DESC')
         .limit(limit)
@@ -472,22 +582,31 @@ export class VideosService {
       }
 
       console.log(`[WARN] Cache MISS for all videos - fetching from DB`);
-      console.log(`?? Fetching all videos (limit: ${limit})...`);
+      console.log(`📺 Fetching all videos (limit: ${limit})...`);
 
+      // Fetch more videos to account for privacy filtering
       const videos = await this.videoRepository.find({
         where: {
           status: VideoStatus.READY,
           isHidden: false, // Only show non-hidden videos
+          visibility: VideoVisibility.PUBLIC, // Only public videos in general feed
         },
         order: { createdAt: 'DESC' },
-        take: limit,
+        take: limit * 2, // Fetch extra to compensate for privacy filtering
       });
 
-      console.log(`[OK] Found ${videos.length} ready videos`);
+      console.log(`[OK] Found ${videos.length} ready public videos`);
+
+      // [PRIVACY] Filter out videos from private accounts and restricted users
+      const filteredVideos = await this.privacyService.filterVideosByPrivacy(videos);
+      console.log(`[PRIVACY] After privacy filter: ${filteredVideos.length}/${videos.length} videos`);
+
+      // Trim to requested limit
+      const limitedVideos = filteredVideos.slice(0, limit);
 
       // Add like and comment counts
       const videosWithCounts = await Promise.all(
-        videos.map(async (video) => {
+        limitedVideos.map(async (video) => {
           const likeCount = await this.likesService.getLikeCount(video.id);
           const commentCount = await this.commentsService.getCommentCount(video.id);
           const saveCount = await this.savedVideosService.getSaveCount(video.id);
@@ -503,7 +622,7 @@ export class VideosService {
         }),
       );
 
-      console.log(`?? Returning ${videosWithCounts.length} videos with counts`);
+      console.log(`📺 Returning ${videosWithCounts.length} videos with counts`);
 
       // [OK] Store in cache for 1 minute (feed changes frequently)
       await this.cacheManager.set(cacheKey, videosWithCounts, 60000);
@@ -557,17 +676,34 @@ export class VideosService {
       const videos = await this.videoRepository
         .createQueryBuilder('video')
         .where('video.status = :status', { status: VideoStatus.READY })
+        .andWhere('video.isHidden = :isHidden', { isHidden: false })
+        .andWhere('video.visibility = :visibility', { visibility: VideoVisibility.PUBLIC })
         .andWhere('video.userId IN (:...userIds)', { userIds: followingOnlyIds.map(id => id.toString()) })
         .andWhere('video.createdAt > :since', { since: sevenDaysAgo })
         .orderBy('video.createdAt', 'DESC')
         .take(limit)
         .getMany();
 
-      console.log(`[OK] Found ${videos.length} recent videos from following users (last 7 days, excluding friends)`);
+      console.log(`[OK] Found ${videos.length} recent public videos from following users (last 7 days, excluding friends)`);
+
+      // [PRIVACY] Filter by whoCanViewVideos setting
+      // Following tab = one-way follows, NOT mutual friends
+      // So whoCanViewVideos='friends' should be excluded (viewer is NOT a friend, just a follower)
+      // accountPrivacy='private' is OK because viewer IS a follower
+      const ownerIds = [...new Set(videos.map(v => v.userId))];
+      const settingsMap = await this.privacyService.getPrivacySettingsBatch(ownerIds);
+      const privacyFiltered = videos.filter(video => {
+        const settings = settingsMap.get(video.userId);
+        if (!settings) return true;
+        if (settings.whoCanViewVideos === 'onlyMe') return false;
+        if (settings.whoCanViewVideos === 'friends') return false; // Not friends, just following
+        return true;
+      });
+      console.log(`[PRIVACY] Following feed after privacy filter: ${privacyFiltered.length}/${videos.length}`);
 
       // Add like and comment counts
       const videosWithCounts = await Promise.all(
-        videos.map(async (video) => {
+        privacyFiltered.map(async (video) => {
           const likeCount = await this.likesService.getLikeCount(video.id);
           const commentCount = await this.commentsService.getCommentCount(video.id);
           const saveCount = await this.savedVideosService.getSaveCount(video.id);
@@ -616,17 +752,33 @@ export class VideosService {
       const videos = await this.videoRepository
         .createQueryBuilder('video')
         .where('video.status = :status', { status: VideoStatus.READY })
+        .andWhere('video.isHidden = :isHidden', { isHidden: false })
+        .andWhere('video.visibility IN (:...visibilities)', { visibilities: [VideoVisibility.PUBLIC, VideoVisibility.FRIENDS] })
         .andWhere('video.userId IN (:...userIds)', { userIds: mutualFriendIds.map(id => id.toString()) })
         .andWhere('video.createdAt > :since', { since: sevenDaysAgo })
         .orderBy('video.createdAt', 'DESC')
         .take(limit)
         .getMany();
 
-      console.log(`[OK] Found ${videos.length} recent videos from mutual friends (last 7 days)`);
+      console.log(`[OK] Found ${videos.length} recent public/friends videos from mutual friends (last 7 days)`);
+
+      // [PRIVACY] Filter by whoCanViewVideos setting
+      // Friends tab = mutual follows, so whoCanViewVideos='friends' is OK
+      // accountPrivacy='private' is OK because viewer is a follower AND friend
+      // Only whoCanViewVideos='onlyMe' should be excluded
+      const ownerIds = [...new Set(videos.map(v => v.userId))];
+      const settingsMap = await this.privacyService.getPrivacySettingsBatch(ownerIds);
+      const privacyFiltered = videos.filter(video => {
+        const settings = settingsMap.get(video.userId);
+        if (!settings) return true;
+        if (settings.whoCanViewVideos === 'onlyMe') return false;
+        return true;
+      });
+      console.log(`[PRIVACY] Friends feed after privacy filter: ${privacyFiltered.length}/${videos.length}`);
 
       // Add like and comment counts
       const videosWithCounts = await Promise.all(
-        videos.map(async (video) => {
+        privacyFiltered.map(async (video) => {
           const likeCount = await this.likesService.getLikeCount(video.id);
           const commentCount = await this.commentsService.getCommentCount(video.id);
           const saveCount = await this.savedVideosService.getSaveCount(video.id);
@@ -760,7 +912,7 @@ export class VideosService {
 
     // [OK] Invalidate caches
     await this.cacheManager.del(`video:${videoId}`);
-    await this.cacheManager.del(`user_videos:${userId}`);
+    await this.invalidateUserVideosCache(userId);
 
     // Log video_hidden activity
     this.activityLoggerService.logActivity({
@@ -863,7 +1015,52 @@ export class VideosService {
         console.log(`[WARN] Raw video file not found or already deleted: ${video.rawVideoPath}`);
       }
 
-      // 4. Finally, delete the video record from database
+      // 4. Delete custom thumbnail if exists locally
+      if (video.thumbnailUrl) {
+        // Custom thumbnail stored at /uploads/thumbnails/{filename}
+        if (video.thumbnailUrl.startsWith('/uploads/thumbnails/')) {
+          const thumbLocalPath = path.resolve(process.cwd(), video.thumbnailUrl.replace(/^\//, ''));
+          if (fs.existsSync(thumbLocalPath)) {
+            try {
+              fs.unlinkSync(thumbLocalPath);
+              console.log(`[DELETE] Deleted custom thumbnail: ${thumbLocalPath}`);
+            } catch (e) {
+              console.error(`[WARN] Could not delete custom thumbnail: ${e}`);
+            }
+          }
+        }
+      }
+
+      // 5. Delete from S3 if enabled (raw video, processed videos, thumbnails)
+      if (this.storageService.isEnabled()) {
+        try {
+          // Delete raw video from S3
+          if (video.rawVideoPath) {
+            const rawFileName = path.basename(video.rawVideoPath);
+            await this.storageService.deleteFile(`raw_videos/${rawFileName}`);
+            console.log(`[S3] Deleted raw video from S3: raw_videos/${rawFileName}`);
+          }
+
+          // Delete processed video folder from S3
+          await this.storageService.deleteDirectory(`processed_videos/${processedFolderName}/`);
+          console.log(`[S3] Deleted processed videos from S3: processed_videos/${processedFolderName}/`);
+
+          // Delete custom thumbnail from S3
+          if (video.thumbnailUrl && video.thumbnailUrl.includes('/thumbnails/')) {
+            // Extract S3 key from CloudFront URL or local path
+            const thumbMatch = video.thumbnailUrl.match(/thumbnails\/([^/?]+)/);
+            if (thumbMatch && thumbMatch[1]) {
+              await this.storageService.deleteFile(`thumbnails/${thumbMatch[1]}`);
+              console.log(`[S3] Deleted thumbnail from S3: thumbnails/${thumbMatch[1]}`);
+            }
+          }
+        } catch (s3Error) {
+          // Log S3 errors but don't block the deletion
+          console.error(`[WARN] S3 cleanup error (video still deleted): ${s3Error.message}`);
+        }
+      }
+
+      // 6. Finally, delete the video record from database
       await this.videoRepository.delete(videoId);
 
       // [OK] Delete from Elasticsearch index
@@ -871,7 +1068,7 @@ export class VideosService {
 
       // [OK] Invalidate all related caches
       await this.cacheManager.del(`video:${videoId}`);
-      await this.cacheManager.del(`user_videos:${userId}`);
+      await this.invalidateUserVideosCache(userId);
       // Clear common feed cache keys
       await this.cacheManager.del('all_videos:50');
       await this.cacheManager.del('all_videos:100');
@@ -926,7 +1123,7 @@ export class VideosService {
 
     // Invalidate cache
     await this.cacheManager.del(`video:${videoId}`);
-    await this.cacheManager.del(`user_videos:${settings.userId}`);
+    await this.invalidateUserVideosCache(settings.userId);
 
     console.log(`[PRIVACY] Video ${videoId} privacy updated: visibility=${video.visibility}, comments=${video.allowComments}, duet=${video.allowDuet}`);
 
@@ -963,7 +1160,7 @@ export class VideosService {
 
     // Invalidate cache
     await this.cacheManager.del(`video:${videoId}`);
-    await this.cacheManager.del(`user_videos:${updateData.userId}`);
+    await this.invalidateUserVideosCache(updateData.userId);
 
     // Update Elasticsearch index - convert Video to VideoDocument
     await this.searchService.indexVideo({
@@ -1031,7 +1228,7 @@ export class VideosService {
 
     // Invalidate cache
     await this.cacheManager.del(`video:${videoId}`);
-    await this.cacheManager.del(`user_videos:${userId}`);
+    await this.invalidateUserVideosCache(userId);
     await this.cacheManager.del('all_videos:50');
 
     console.log(`[THUMB] Video ${videoId} thumbnail updated: ${video.thumbnailUrl}`);
@@ -1056,6 +1253,25 @@ export class VideosService {
       // 1. Upload custom thumbnail to S3 if provided (before creating DB record)
       let thumbnailUrl: string | undefined;
       if (thumbnailFile) {
+        // FileFieldsInterceptor uses multerConfig which saves ALL files to ./uploads/raw_videos/
+        // We need to move the thumbnail to the correct directory: ./uploads/thumbnails/
+        const thumbnailsDir = path.resolve(process.cwd(), 'uploads', 'thumbnails');
+        if (!fs.existsSync(thumbnailsDir)) {
+          fs.mkdirSync(thumbnailsDir, { recursive: true });
+        }
+        const correctThumbPath = path.join(thumbnailsDir, thumbnailFile.filename);
+        try {
+          fs.renameSync(thumbnailFile.path, correctThumbPath);
+          thumbnailFile.path = correctThumbPath;
+          console.log(`[THUMB] Moved thumbnail from raw_videos/ to thumbnails/: ${correctThumbPath}`);
+        } catch (moveErr) {
+          // Fallback: copy + delete if rename fails (cross-device)
+          fs.copyFileSync(thumbnailFile.path, correctThumbPath);
+          fs.unlinkSync(thumbnailFile.path);
+          thumbnailFile.path = correctThumbPath;
+          console.log(`[THUMB] Copied thumbnail to thumbnails/: ${correctThumbPath}`);
+        }
+
         if (this.storageService.isEnabled()) {
           // Upload to S3 and get CloudFront URL
           const thumbS3Key = `thumbnails/${thumbnailFile.filename}`;
@@ -1064,10 +1280,9 @@ export class VideosService {
           );
           thumbnailUrl = uploadResult.url;
           console.log(`[S3] Custom thumbnail uploaded: ${thumbnailUrl}`);
-          // Delete local thumbnail file after S3 upload
-          try { fs.unlinkSync(thumbnailFile.path); } catch (e) { /* ignore */ }
+          // Keep local file for dev/fallback, S3 is the primary source in production
         } else {
-          // Local storage fallback
+          // Local storage - file is now at ./uploads/thumbnails/{filename}
           thumbnailUrl = `/uploads/thumbnails/${thumbnailFile.filename}`;
         }
       }
@@ -1081,6 +1296,8 @@ export class VideosService {
         rawVideoPath: videoFile.path,
         fileSize: videoFile.size,
         status: VideoStatus.PROCESSING,
+        visibility: uploadVideoDto.visibility || VideoVisibility.PUBLIC,
+        allowComments: uploadVideoDto.allowComments !== undefined ? uploadVideoDto.allowComments : true,
         // Set custom thumbnail (CloudFront URL if S3 enabled, local path otherwise)
         thumbnailUrl,
       });
@@ -1112,7 +1329,7 @@ export class VideosService {
       console.log('Job sent to RabbitMQ queue');
 
       // 6. Invalidate user videos cache
-      await this.cacheManager.del(`user_videos:${uploadVideoDto.userId}`);
+      await this.invalidateUserVideosCache(uploadVideoDto.userId);
       console.log(`[OK] Cache invalidated for user ${uploadVideoDto.userId}`);
 
       // 7. Log video_posted activity

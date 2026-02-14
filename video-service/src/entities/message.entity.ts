@@ -63,4 +63,15 @@ export class Message {
   // Who deleted the message for everyone
   @Column({ nullable: true })
   deletedForEveryoneBy: string;
+
+  // ========== MESSAGE EDITING ==========
+  
+  @Column({ type: 'boolean', default: false })
+  isEdited: boolean;
+
+  @Column({ nullable: true })
+  editedAt: Date;
+
+  @Column({ type: 'text', nullable: true })
+  originalContent: string;
 }

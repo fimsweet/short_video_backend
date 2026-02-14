@@ -16,4 +16,20 @@ export class UpdateUserSettingsDto {
   whoCanSendMessages?: string;
   whoCanComment?: string;
   filterComments?: boolean;
+
+  // Push notification preferences (granular)
+  pushLikes?: boolean;
+  pushComments?: boolean;
+  pushNewFollowers?: boolean;
+  pushMentions?: boolean;
+  pushMessages?: boolean;
+  pushProfileViews?: boolean;
+
+  // In-app notification preferences (granular)
+  inAppLikes?: boolean;
+  inAppComments?: boolean;
+  inAppNewFollowers?: boolean;
+  inAppMentions?: boolean;
+  inAppMessages?: boolean;
+  inAppProfileViews?: boolean;
 }

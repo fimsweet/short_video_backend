@@ -17,6 +17,7 @@ lerna-debug.log*
 # Environment variables
 .env
 .env*.local
+.env.production
 
 # IDEs and editors
 .idea

@@ -92,7 +92,11 @@ export class UsersController {
       throw new NotFoundException('User not found');
     }
     const { password, ...result } = user;
-    return result;
+    // Include deactivation info so frontend can display appropriate UI
+    return {
+      ...result,
+      isDeactivated: user.isDeactivated ?? false,
+    };
   }
 
   // Check if user has password (for OAuth users to know if they need to set or change password)
@@ -170,7 +174,7 @@ export class UsersController {
 
   @Put('profile')
   @UseGuards(JwtAuthGuard)
-  async updateProfile(@Request() req, @Body() updateData: { bio?: string; gender?: string; dateOfBirth?: string }) {
+  async updateProfile(@Request() req, @Body() updateData: { bio?: string; gender?: string; dateOfBirth?: string; fullName?: string }) {
     const userId = req.user.userId;
     const updatedUser = await this.usersService.updateProfile(userId, updateData);
     return {
@@ -178,6 +182,36 @@ export class UsersController {
       message: 'Profile updated successfully',
       user: updatedUser,
     };
+  }
+
+  // Change display name (with validation and 7-day cooldown like TikTok)
+  @Put('change-display-name')
+  @UseGuards(JwtAuthGuard)
+  async changeDisplayName(
+    @Request() req,
+    @Body() body: { newDisplayName: string },
+  ) {
+    const userId = req.user.userId;
+    const result = await this.usersService.changeDisplayName(userId, body.newDisplayName);
+    return result;
+  }
+
+  // Remove display name (with 7-day cooldown)
+  @Put('remove-display-name')
+  @UseGuards(JwtAuthGuard)
+  async removeDisplayName(@Request() req) {
+    const userId = req.user.userId;
+    const result = await this.usersService.removeDisplayName(userId);
+    return result;
+  }
+
+  // Get display name change info
+  @Get('display-name-change-info')
+  @UseGuards(JwtAuthGuard)
+  async getDisplayNameChangeInfo(@Request() req) {
+    const userId = req.user.userId;
+    const info = await this.usersService.getDisplayNameChangeInfo(userId);
+    return { success: true, ...info };
   }
 
   // Change username (with validation and 30-day cooldown like TikTok)
@@ -334,6 +368,15 @@ export class UsersController {
     return status;
   }
 
+  // Get deactivated user IDs from a batch (used by video-service)
+  @Post('deactivated-batch')
+  async getDeactivatedBatch(
+    @Body() body: { userIds: number[] },
+  ) {
+    const deactivatedIds = await this.usersService.getDeactivatedUserIds(body.userIds);
+    return { deactivatedIds };
+  }
+
   // ============= PRIVACY SETTINGS (INTERNAL API for video-service) =============
   
   // Get user privacy settings (called by video-service)
@@ -361,5 +404,19 @@ export class UsersController {
       body.action,
     );
     return result;
+  }
+
+  // Get privacy settings for multiple users (batch) - used by video-service
+  @Post('privacy/batch')
+  async getPrivacySettingsBatch(
+    @Body() body: { userIds: number[] },
+  ) {
+    const settingsMap = await this.usersService.getPrivacySettingsBatch(body.userIds);
+    // Convert Map to plain object for JSON serialization
+    const result: Record<string, any> = {};
+    settingsMap.forEach((value, key) => {
+      result[key.toString()] = value;
+    });
+    return { success: true, settings: result };
   }
 }

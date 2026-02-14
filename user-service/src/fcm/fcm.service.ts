@@ -1,43 +1,40 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as admin from 'firebase-admin';
+import * as path from 'path';
+import * as fs from 'fs';
 
 @Injectable()
 export class FcmService {
   private readonly logger = new Logger(FcmService.name);
-  private isInitialized = false;
 
-  constructor() {
-    this.initializeFirebase();
-  }
+  /**
+   * Check if Firebase Admin is ready (initialized by FirebaseAdminService or self)
+   * Uses lazy check so it works regardless of module loading order
+   */
+  private ensureInitialized(): boolean {
+    if (admin.apps.length > 0) {
+      return true;
+    }
 
-  private initializeFirebase() {
+    // Last resort: try to initialize ourselves if FirebaseAdminService hasn't done it yet
+    this.logger.warn('Firebase not yet initialized by AuthModule, attempting self-init...');
     try {
-      // Check if Firebase is already initialized
-      if (admin.apps.length > 0) {
-        this.isInitialized = true;
-        this.logger.log('Firebase Admin already initialized');
-        return;
-      }
-
-      // Try to initialize with service account file
-      const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH || './firebase-service-account.json';
+      const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH 
+        || path.join(process.cwd(), 'firebase-service-account.json');
       
-      try {
-        const serviceAccount = require(serviceAccountPath);
+      if (fs.existsSync(serviceAccountPath)) {
+        const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
         admin.initializeApp({
           credential: admin.credential.cert(serviceAccount),
         });
-        this.isInitialized = true;
-        this.logger.log('Firebase Admin initialized with service account');
-      } catch (error) {
-        // If service account file doesn't exist, try default credentials
-        this.logger.warn('Firebase service account not found, FCM notifications disabled');
-        this.isInitialized = false;
+        this.logger.log(`Firebase Admin self-initialized (project: ${serviceAccount.project_id})`);
+        return true;
       }
     } catch (error) {
-      this.logger.error('Failed to initialize Firebase Admin:', error);
-      this.isInitialized = false;
+      this.logger.error('Firebase self-init failed:', error);
     }
+
+    return false;
   }
 
   /**
@@ -49,7 +46,7 @@ export class FcmService {
     body: string,
     data?: Record<string, string>,
   ): Promise<boolean> {
-    if (!this.isInitialized) {
+    if (!this.ensureInitialized()) {
       this.logger.warn('Firebase not initialized, skipping notification');
       return false;
     }
@@ -104,7 +101,7 @@ export class FcmService {
     body: string,
     data?: Record<string, string>,
   ): Promise<{ successCount: number; failureCount: number; failedTokens: string[] }> {
-    if (!this.isInitialized) {
+    if (!this.ensureInitialized()) {
       this.logger.warn('Firebase not initialized, skipping notifications');
       return { successCount: 0, failureCount: fcmTokens.length, failedTokens: fcmTokens };
     }
@@ -144,6 +141,9 @@ export class FcmService {
       response.responses.forEach((resp, idx) => {
         if (!resp.success) {
           failedTokens.push(fcmTokens[idx]);
+          this.logger.error(
+            `FCM send failed for token[${idx}]: code=${resp.error?.code}, message=${resp.error?.message}`,
+          );
         }
       });
 

@@ -56,6 +56,21 @@ services:
       timeout: 10s
       retries: 5
 
+  # API Gateway (Nginx) - local dev
+  # Run: docker compose up api-gateway (only needed when testing gateway locally)
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    ports:
+      - "80:80"
+    extra_hosts:
+      - "user-service:host-gateway"
+      - "video-service:host-gateway"
+    profiles:
+      - gateway
+
 volumes:
   mysql_data:
   rabbitmq_data:

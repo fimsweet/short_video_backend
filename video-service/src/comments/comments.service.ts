@@ -22,14 +22,20 @@ export class CommentsService {
   ) { }
 
   async createComment(videoId: string, userId: string, content: string, parentId?: string, imageUrl?: string | null): Promise<Comment> {
-    // Get video to find owner for privacy check
+    // Get video to find owner for privacy check and check allowComments
     const videos = await this.commentRepository.manager.query(
-      'SELECT id, userId FROM videos WHERE id = ?',
+      'SELECT id, userId, allowComments FROM videos WHERE id = ?',
       [videoId]
     );
     
     if (videos && videos.length > 0) {
-      const videoOwnerId = videos[0].userId;
+      const video = videos[0];
+      const videoOwnerId = video.userId;
+      
+      // Check if comments are allowed on this video
+      if (video.allowComments === false || video.allowComments === 0) {
+        throw new ForbiddenException('Comments are disabled for this video');
+      }
       
       // Check if user is allowed to comment
       const canComment = await this.privacyService.canComment(userId, videoOwnerId);
@@ -37,11 +43,19 @@ export class CommentsService {
         throw new ForbiddenException(canComment.reason || 'Bạn không được phép bình luận video này');
       }
 
-      // Check if comment should be filtered for bad words
+      // Check if comment should be filtered for bad words (block posting)
       const shouldFilter = await this.privacyService.shouldFilterComment(videoOwnerId, content);
       if (shouldFilter) {
         throw new BadRequestException('Bình luận chứa nội dung không phù hợp');
       }
+    }
+
+    // Check toxicity with AI (non-blocking — flags but doesn't prevent posting)
+    let isToxic = false;
+    try {
+      isToxic = await this.privacyService.checkToxicityWithAI(content);
+    } catch (e) {
+      console.error('Toxicity check error (non-blocking):', e);
     }
 
     // If replying to a reply, find the root parent comment
@@ -60,6 +74,8 @@ export class CommentsService {
       content,
       parentId: rootParentId ?? null,
       imageUrl: imageUrl ?? null,
+      isToxic,
+      censoredContent: isToxic ? this.privacyService.censorBadWords(content) : null,
     });
 
     const savedComment = await this.commentRepository.save(comment);
@@ -230,6 +246,39 @@ export class CommentsService {
     });
 
     return true;
+  }
+
+  async editComment(commentId: string, userId: string, newContent: string): Promise<Comment> {
+    const comment = await this.commentRepository.findOne({
+      where: { id: commentId, userId },
+    });
+
+    if (!comment) {
+      throw new BadRequestException('Comment not found or you are not the author');
+    }
+
+    // Check if within 5 minutes edit window
+    const now = new Date();
+    const createdAt = new Date(comment.createdAt);
+    const diffMinutes = (now.getTime() - createdAt.getTime()) / (1000 * 60);
+    if (diffMinutes > 5) {
+      throw new BadRequestException('Chỉ có thể chỉnh sửa bình luận trong 5 phút');
+    }
+
+    // Check toxicity of new content with AI
+    let isToxic = false;
+    try {
+      isToxic = await this.privacyService.checkToxicityWithAI(newContent);
+    } catch (e) {
+      console.error('Toxicity check error on edit (non-blocking):', e);
+    }
+
+    comment.content = newContent;
+    comment.isEdited = true;
+    comment.isToxic = isToxic;
+    comment.censoredContent = isToxic ? this.privacyService.censorBadWords(newContent) : null;
+
+    return this.commentRepository.save(comment);
   }
 
   private async deleteRepliesRecursively(commentId: string): Promise<void> {

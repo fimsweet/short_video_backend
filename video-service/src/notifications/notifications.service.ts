@@ -26,6 +26,26 @@ export class NotificationsService {
       return null;
     }
 
+    // Check if user has this in-app notification type enabled
+    const typeKey = this.getNotificationTypeKey(type);
+    const isEnabled = await this.pushNotificationService.isNotificationEnabled(
+      recipientId,
+      typeKey,
+    );
+
+    if (!isEnabled) {
+      // Still send push (push controller checks its own preferences)
+      // but don't create in-app notification record
+      this.sendPushForNotification(
+        recipientId,
+        type,
+        senderName || 'Người dùng',
+        message,
+        videoId,
+      );
+      return null;
+    }
+
     const notification = this.notificationRepository.create({
       recipientId,
       senderId,
@@ -47,6 +67,28 @@ export class NotificationsService {
     );
 
     return saved;
+  }
+
+  /**
+   * Map NotificationType enum to preference key string
+   */
+  private getNotificationTypeKey(type: NotificationType): string {
+    switch (type) {
+      case NotificationType.LIKE:
+        return 'like';
+      case NotificationType.COMMENT:
+        return 'comment';
+      case NotificationType.FOLLOW:
+        return 'follow';
+      case NotificationType.MENTION:
+        return 'mention';
+      case NotificationType.REPLY:
+        return 'reply';
+      case NotificationType.MESSAGE:
+        return 'message';
+      default:
+        return (type as string).toString().toLowerCase();
+    }
   }
 
   /**

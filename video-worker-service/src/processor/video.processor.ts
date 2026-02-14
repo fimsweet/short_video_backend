@@ -9,6 +9,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { Video, VideoStatus } from '../entities/video.entity';
 import { StorageService } from '../config/storage.service';
+import { AiAnalysisService } from '../config/ai-analysis.service';
 
 // Import fluent-ffmpeg correctly
 const ffmpeg = require('fluent-ffmpeg');
@@ -29,6 +30,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
   private currentJobCount = 0;
   private retryCount = 0;
   private readonly MAX_RETRIES = 10;
+  private isReconnecting = false; // Prevent concurrent reconnect attempts
 
   // ============================================
   // AWS BATCH MODE - Auto-exit when idle
@@ -57,6 +59,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     private configService: ConfigService,
     private httpService: HttpService,
     private storageService: StorageService,
+    private aiAnalysisService: AiAnalysisService,
   ) {
     this.rabbitMQUrl = this.configService.get<string>('RABBITMQ_URL') || 'amqp://admin:password@localhost:5672';
     this.queueName = this.configService.get<string>('RABBITMQ_QUEUE') || 'video_processing_queue';
@@ -236,40 +239,94 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Attach connection + channel error/close handlers for robust reconnection.
+   * CRITICAL for cloud environments where TCP connections can be silently dropped
+   * by firewalls, load balancers, or RabbitMQ restarts.
+   */
+  private attachConnectionHandlers(): void {
+    if (!this.connection || !this.channel) return;
+
+    this.connection.on('error', (err) => {
+      console.error('[ERROR] RabbitMQ connection error:', err.message);
+      if (!this.isShuttingDown) {
+        this.scheduleReconnect();
+      }
+    });
+
+    this.connection.on('close', () => {
+      console.warn('[WARN] RabbitMQ connection closed');
+      if (!this.isShuttingDown) {
+        this.scheduleReconnect();
+      }
+    });
+
+    this.channel.on('error', (err) => {
+      console.error('[ERROR] RabbitMQ channel error:', err.message);
+    });
+
+    // CRITICAL FIX: Channel close MUST trigger reconnect.
+    // In cloud environments, the channel can die independently of the connection
+    // (e.g., heartbeat timeout, server-initiated close, consumer_timeout).
+    // Without this, the worker becomes a zombie — connection alive but no consumer.
+    this.channel.on('close', () => {
+      console.warn('[WARN] RabbitMQ channel closed — triggering reconnect');
+      if (!this.isShuttingDown) {
+        this.scheduleReconnect();
+      }
+    });
+  }
+
+  /**
+   * Safely close existing connection before reconnecting.
+   * Prevents leaked TCP sockets and file descriptor exhaustion.
+   */
+  private async cleanupConnection(): Promise<void> {
+    try {
+      if (this.channel) {
+        // Remove listeners to prevent triggering reconnect during cleanup
+        this.channel.removeAllListeners();
+        await this.channel.close().catch(() => {});
+        this.channel = null;
+      }
+    } catch (e) { /* ignore */ }
+    try {
+      if (this.connection) {
+        this.connection.removeAllListeners();
+        await this.connection.close().catch(() => {});
+        this.connection = null;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
   private async startWorker(): Promise<void> {
     if (this.isShuttingDown) return;
+    this.isReconnecting = false;
     
     console.log('Video Worker Service started. Waiting for jobs...');
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 
+    // Cleanup any stale connection before connecting
+    await this.cleanupConnection();
+
     try {
-      this.connection = await amqp.connect(this.rabbitMQUrl);
+      // ============================================
+      // HEARTBEAT: Detect dead connections in cloud
+      // ============================================
+      // Without heartbeat (default=0), firewalls/LBs can silently kill
+      // idle TCP connections. Heartbeat=30s sends AMQP heartbeat frames
+      // every 30s. If 2 consecutive beats are missed (60s), the client
+      // detects the dead connection and triggers reconnect.
+      // ============================================
+      const connectUrl = this.rabbitMQUrl.includes('?')
+        ? `${this.rabbitMQUrl}&heartbeat=30`
+        : `${this.rabbitMQUrl}?heartbeat=30`;
+
+      this.connection = await amqp.connect(connectUrl);
       this.channel = await this.connection.createChannel();
 
-      // ============================================
-      // Error handlers để tránh unhandled error crash
-      // ============================================
-      this.connection.on('error', (err) => {
-        console.error('[ERROR] RabbitMQ connection error:', err.message);
-        if (!this.isShuttingDown) {
-          this.scheduleReconnect();
-        }
-      });
-
-      this.connection.on('close', () => {
-        console.warn('[WARN] RabbitMQ connection closed');
-        if (!this.isShuttingDown) {
-          this.scheduleReconnect();
-        }
-      });
-
-      this.channel.on('error', (err) => {
-        console.error('[ERROR] RabbitMQ channel error:', err.message);
-      });
-
-      this.channel.on('close', () => {
-        console.warn('[WARN] RabbitMQ channel closed');
-      });
+      // Attach error/close handlers (including channel close → reconnect)
+      this.attachConnectionHandlers();
 
       // Reset retry count on successful connection
       this.retryCount = 0;
@@ -285,8 +342,8 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
         await this.channel.assertQueue(dlqName, { durable: true });
         
         // Create main queue with DLQ routing
-        // If queue exists with SAME args ? OK
-        // If queue exists with DIFFERENT args ? will throw error
+        // If queue exists with SAME args → OK
+        // If queue exists with DIFFERENT args → will throw error
         await this.channel.assertQueue(this.queueName, { 
           durable: true,
           arguments: {
@@ -315,16 +372,15 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
         }
         
         // Reconnect because channel is closed after assertQueue fails
-        this.connection = await amqp.connect(this.rabbitMQUrl);
+        await this.cleanupConnection();
+        const fallbackUrl = this.rabbitMQUrl.includes('?')
+          ? `${this.rabbitMQUrl}&heartbeat=30`
+          : `${this.rabbitMQUrl}?heartbeat=30`;
+        this.connection = await amqp.connect(fallbackUrl);
         this.channel = await this.connection.createChannel();
         
-        // Attach error handlers again
-        this.connection.on('error', (err) => {
-          if (!this.isShuttingDown) this.scheduleReconnect();
-        });
-        this.connection.on('close', () => {
-          if (!this.isShuttingDown) this.scheduleReconnect();
-        });
+        // Attach ALL handlers again (including channel close → reconnect)
+        this.attachConnectionHandlers();
         
         // Use existing queue without DLQ
         await this.channel.assertQueue(this.queueName, { durable: true });
@@ -339,20 +395,27 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ============================================
-  // Exponential backoff for reconnection
+  // Exponential backoff with jitter for reconnection
+  // ============================================
+  // Jitter prevents "thundering herd" when multiple workers
+  // (e.g., K8s pods or Batch containers) reconnect simultaneously
+  // after a RabbitMQ restart, spreading the load.
   // ============================================
   private scheduleReconnect(): void {
-    if (this.isShuttingDown) return;
+    if (this.isShuttingDown || this.isReconnecting) return;
+    this.isReconnecting = true;
     
     this.retryCount++;
     if (this.retryCount > this.MAX_RETRIES) {
       console.error(`[ERROR] Max retries (${this.MAX_RETRIES}) exceeded. Giving up.`);
-      process.exit(1); // Let K8s restart the pod
+      process.exit(1); // Let K8s/Batch restart the container
     }
     
-    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
-    const delay = Math.min(1000 * Math.pow(2, this.retryCount - 1), 30000);
-    console.log(`[RETRY] Reconnecting in ${delay/1000}s... (attempt ${this.retryCount}/${this.MAX_RETRIES})`);
+    // Exponential backoff with jitter: base * 2^(retry-1) + random(0-1000ms), max 30s
+    const baseDelay = Math.min(1000 * Math.pow(2, this.retryCount - 1), 30000);
+    const jitter = Math.floor(Math.random() * 1000);
+    const delay = baseDelay + jitter;
+    console.log(`[RETRY] Reconnecting in ${(delay/1000).toFixed(1)}s... (attempt ${this.retryCount}/${this.MAX_RETRIES})`);
     setTimeout(() => this.startWorker(), delay);
   }
 
@@ -547,9 +610,27 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       const originalAspectRatio = await this.getVideoAspectRatio(inputPath);
       console.log(`[OK] Aspect ratio: ${originalAspectRatio}`);
 
-      // 4. FFmpeg (convert sang HLS)
-      console.log(`[FFMPEG] Starting FFmpeg conversion...`);
-      await this.convertToHLS(inputPath, outputDir, videoId, originalAspectRatio);
+      // ============================================
+      // 4. FFmpeg + AI Analysis (RUN IN PARALLEL)
+      // ============================================
+      // AI analysis (~3-5s) runs concurrently with FFmpeg (~30-120s)
+      // so it adds ZERO extra delay to the processing pipeline
+      // ============================================
+      console.log(`[FFMPEG] Starting FFmpeg conversion + AI analysis in parallel...`);
+      
+      const ffmpegPromise = this.convertToHLS(inputPath, outputDir, videoId, originalAspectRatio);
+      const aiPromise = this.aiAnalysisService.analyzeVideo(
+        inputPath,
+        video.title,
+        video.description || '',
+        videoDuration,
+      ).catch(err => {
+        console.warn(`[AI] AI analysis failed (non-critical): ${err.message}`);
+        return null;
+      });
+
+      // Wait for both to complete
+      const [, aiResult] = await Promise.all([ffmpegPromise, aiPromise]);
 
       // 5. Tạo thumbnail từ video (skip if custom thumbnail already provided)
       if (skipThumbnailGeneration && video.thumbnailUrl) {
@@ -621,6 +702,16 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
         aspectRatio: originalAspectRatio,
       });
 
+      // ============================================
+      // 8.5 [AI] Assign AI-predicted categories via video-service API
+      // ============================================
+      // This is a non-critical step - if it fails, the video is still READY
+      // with user-selected categories. AI categories are bonus.
+      // ============================================
+      if (aiResult && aiResult.categoryIds.length > 0) {
+        await this.assignAiCategories(videoId, aiResult.categoryIds);
+      }
+
       // 9. Notify video-service to invalidate cache
       await this.notifyProcessingComplete(videoId, video.userId);
 
@@ -642,22 +733,19 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       // ============================================
       // [CLEANUP] CLEANUP ON FAILURE - Prevent Disk Full
       // ============================================
-      // When processing fails (duration exceeded, corrupt file, 
-      // ffmpeg crash, etc.), we MUST clean up:
-      // 1. Raw video file (inputPath) - no longer needed
-      // 2. Partial output directory (outputDir) - incomplete HLS files
-      // This prevents disk space exhaustion on long-running systems
+      // When processing fails, clean up ONLY partial outputs.
+      // KEEP the raw video file so retry is possible.
+      // 1. Raw video file (inputPath) - KEEP for retry!
+      // 2. Partial output directory (outputDir) - DELETE (incomplete HLS files)
       // ============================================
       try {
-        if (inputPath && fs.existsSync(inputPath)) {
-          console.log(`[CLEANUP] Cleanup: Deleting raw video file of failed job...`);
-          fs.unlinkSync(inputPath);
-          console.log(`   [OK] Deleted raw file: ${inputPath}`);
-        }
         if (outputDir && fs.existsSync(outputDir)) {
           console.log(`[CLEANUP] Cleanup: Removing incomplete output directory...`);
           fs.rmSync(outputDir, { recursive: true, force: true });
           console.log(`   [OK] Deleted output dir: ${outputDir}`);
+        }
+        if (inputPath && fs.existsSync(inputPath)) {
+          console.log(`[CLEANUP] Raw video file KEPT for retry: ${inputPath}`);
         }
       } catch (cleanupError) {
         // Log but don't throw - cleanup failure shouldn't mask original error
@@ -1024,6 +1112,32 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       // Log error but don't fail the processing - cache will eventually expire
       console.error(`[WARN] Failed to notify video-service for cache invalidation:`, error.message);
+    }
+  }
+
+  // ============================================
+  // [AI] Assign AI-predicted categories via video-service API
+  // ============================================
+  // Calls POST /categories/video/:videoId/ai-assign
+  // This endpoint does union merge (adds AI categories without removing user-selected ones)
+  // Non-critical: if this fails, the video still works with user-selected categories
+  // ============================================
+  private async assignAiCategories(videoId: string, categoryIds: number[]): Promise<void> {
+    try {
+      console.log(`[AI] Assigning AI categories to video ${videoId}: [${categoryIds.join(', ')}]`);
+      
+      await firstValueFrom(
+        this.httpService.post(
+          `${this.videoServiceUrl}/categories/video/${videoId}/ai-assign`,
+          { categoryIds },
+          { timeout: 10000 }
+        )
+      );
+      
+      console.log(`[AI] [OK] AI categories assigned successfully`);
+    } catch (error) {
+      // Non-critical - video still works without AI categories
+      console.warn(`[AI] Failed to assign AI categories: ${error.message}`);
     }
   }
 }

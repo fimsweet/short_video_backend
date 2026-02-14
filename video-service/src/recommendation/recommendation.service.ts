@@ -6,7 +6,7 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
-import { Video, VideoStatus } from '../entities/video.entity';
+import { Video, VideoStatus, VideoVisibility } from '../entities/video.entity';
 import { VideoCategory } from '../entities/video-category.entity';
 import { Like } from '../entities/like.entity';
 import { LikesService } from '../likes/likes.service';
@@ -15,6 +15,7 @@ import { SavedVideosService } from '../saved-videos/saved-videos.service';
 import { SharesService } from '../shares/shares.service';
 import { CategoriesService } from '../categories/categories.service';
 import { WatchHistoryService } from '../watch-history/watch-history.service';
+import { PrivacyService } from '../config/privacy.service';
 
 interface UserInterest {
   categoryId: number;
@@ -67,6 +68,7 @@ export class RecommendationService {
     private httpService: HttpService,
     @Inject(forwardRef(() => WatchHistoryService))
     private watchHistoryService: WatchHistoryService,
+    private privacyService: PrivacyService,
   ) {}
 
   /**
@@ -74,21 +76,29 @@ export class RecommendationService {
    * 
    * Algorithm: Hybrid (Content-Based + Watch Time + Engagement + Recency + Exploration)
    * 
-   * Score = (Interest Match � 0.35) + (Engagement � 0.25) + (Recency � 0.20) + (Exploration � 0.15) + (Freshness � 0.05)
+   * Score = (Interest Match × 0.30) + (Engagement × 0.25) + (Recency × 0.20) + (Exploration × 0.15) + (Freshness × 0.10)
    * 
    * Interest Match includes:
    * - Explicit interests (user selected)
    * - Implicit from likes
    * - Implicit from watch time (NEW - most important signal)
    */
-  async getRecommendedVideos(userId: number, limit: number = 50): Promise<any[]> {
+  async getRecommendedVideos(userId: number, limit: number = 50, excludeIds: string[] = []): Promise<any[]> {
+    // If excludeIds provided (refresh), skip cache to get fresh results
+    const skipCache = excludeIds.length > 0;
     const cacheKey = `recommendations:${userId}:${limit}`;
     
-    // Check cache first (shorter TTL for personalized content)
-    const cached = await this.cacheManager.get(cacheKey);
-    if (cached) {
-      console.log(`Cache HIT for user ${userId} recommendations`);
-      return cached as any[];
+    if (!skipCache) {
+      // Check cache first (shorter TTL for personalized content)
+      const cached = await this.cacheManager.get(cacheKey);
+      if (cached) {
+        console.log(`Cache HIT for user ${userId} recommendations`);
+        return cached as any[];
+      }
+    } else {
+      // Invalidate old cache when refreshing
+      await this.cacheManager.del(cacheKey);
+      console.log(`Cache SKIPPED for user ${userId} (refresh with ${excludeIds.length} excluded videos)`);
     }
 
     console.log(`Generating recommendations for user ${userId}...`);
@@ -117,13 +127,19 @@ export class RecommendationService {
       const recentlyWatchedSet = new Set(watchedVideoIds.slice(0, EXCLUDE_RECENTLY_WATCHED));
       const olderWatchedSet = new Set(watchedVideoIds.slice(EXCLUDE_RECENTLY_WATCHED));
       
-      console.log(`   Excluding ${recentlyWatchedSet.size} recently watched videos, deprioritizing ${olderWatchedSet.size} older watched`);
+      // Also exclude explicitly passed IDs (from frontend refresh - videos user already saw in feed)
+      for (const id of excludeIds) {
+        recentlyWatchedSet.add(id);
+      }
+      
+      console.log(`   Excluding ${recentlyWatchedSet.size} recently watched/seen videos, deprioritizing ${olderWatchedSet.size} older watched`);
 
-      // 6. Get all ready, non-hidden videos EXCLUDING user's own videos
+      // 6. Get all ready, non-hidden, PUBLIC videos EXCLUDING user's own videos
       const allVideos = await this.videoRepository.find({
         where: {
           status: VideoStatus.READY,
           isHidden: false,
+          visibility: VideoVisibility.PUBLIC, // Only recommend public videos
           userId: Not(userId.toString()), // Exclude user's own videos from recommendations
         },
         order: { createdAt: 'DESC' },
@@ -138,11 +154,15 @@ export class RecommendationService {
       const filteredVideos = allVideos.filter(v => !recentlyWatchedSet.has(v.id));
       console.log(`   Videos after filtering recently watched: ${filteredVideos.length}/${allVideos.length}`);
 
+      // 6.6 [PRIVACY] Filter out videos from private accounts and restricted users
+      const privacyFiltered = await this.privacyService.filterVideosByPrivacy(filteredVideos, userId.toString());
+      console.log(`   Videos after privacy filter: ${privacyFiltered.length}/${filteredVideos.length}`);
+
       // 7. Get all categories user has interacted with (for discovery detection)
       const exploredCategoryIds = new Set(allInterests.map(i => i.categoryId));
 
       // 8. Score each video with new algorithm (pass older watched set for penalizing)
-      const scoredVideos = await this.scoreVideosAdvanced(filteredVideos, allInterests, userId, Array.from(olderWatchedSet));
+      const scoredVideos = await this.scoreVideosAdvanced(privacyFiltered, allInterests, userId, Array.from(olderWatchedSet));
 
       // 9. Sort by score (highest first)
       scoredVideos.sort((a, b) => b.score - a.score);
@@ -345,11 +365,6 @@ export class RecommendationService {
     }
 
     for (const video of videos) {
-      // Skip user's own videos
-      if (video.userId === userId.toString()) {
-        continue;
-      }
-
       const videoCategories = videoCategoryMap.get(video.id) || [];
       let score = 0;
       const matchedCategories: number[] = [];
@@ -367,8 +382,8 @@ export class RecommendationService {
       interestScore = Math.min(interestScore / Math.max(interests.length, 1), 1);
       score += interestScore * WEIGHTS.INTEREST_MATCH;
 
-      // 2. Engagement Score (0.25)
-      const engagementScore = this.calculateEngagementScore(video);
+      // 2. Engagement Score (0.25) — views + like ratio
+      const engagementScore = await this.calculateEngagementScore(video);
       score += engagementScore * WEIGHTS.ENGAGEMENT;
 
       // 3. Recency Score (0.20) - Videos from last 7 days get higher scores
@@ -377,8 +392,9 @@ export class RecommendationService {
       score += recencyScore * WEIGHTS.RECENCY;
 
       // 4. Exploration/Random Score (0.15) - Discovery of new categories
-      // Stronger boost for videos from unexplored categories
-      let explorationScore = Math.random() * 0.5; // Base random factor (0-0.5)
+      // Use hash-based pseudo-random for deterministic scoring within a session
+      const hashSeed = (video.id.charCodeAt(0) * 31 + video.id.charCodeAt(video.id.length - 1) + userId) % 100;
+      let explorationScore = hashSeed / 200; // 0-0.5 deterministic factor
       if (videoCategories.length > 0 && matchedCategories.length === 0) {
         // Strong boost for videos from completely unexplored categories
         explorationScore = Math.min(explorationScore + 0.6, 1);
@@ -506,13 +522,20 @@ export class RecommendationService {
   }
 
   /**
-   * Calculate engagement score based on views, likes ratio
+   * Calculate engagement score based on views + like-to-view ratio
    */
-  private calculateEngagementScore(video: Video): number {
+  private async calculateEngagementScore(video: Video): Promise<number> {
     const viewCount = video.viewCount || 1;
     // Normalize view count (log scale to handle viral videos)
     const normalizedViews = Math.log10(viewCount + 1) / 6; // Assume 1M views = max
-    return Math.min(normalizedViews, 1);
+    const viewScore = Math.min(normalizedViews, 1);
+
+    // Like-to-view ratio as quality signal
+    const likeCount = await this.likesService.getLikeCount(video.id);
+    const likeRatio = viewCount > 0 ? Math.min(likeCount / viewCount, 1) : 0;
+
+    // Blend: 60% view popularity + 40% like quality
+    return viewScore * 0.6 + likeRatio * 0.4;
   }
 
   /**

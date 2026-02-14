@@ -14,6 +14,9 @@ export class VideoCategory {
   @Column()
   categoryId: number;
 
+  @Column({ type: 'boolean', default: false })
+  isAiSuggested: boolean; // true = AI auto-categorized, false = user-selected
+
   @CreateDateColumn()
   createdAt: Date;
 

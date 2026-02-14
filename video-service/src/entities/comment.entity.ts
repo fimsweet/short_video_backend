@@ -27,6 +27,15 @@ export class Comment {
   @Column({ type: 'boolean', default: false })
   isPinned: boolean; // For pinned/highlighted comments
 
+  @Column({ type: 'boolean', default: false })
+  isToxic: boolean; // Flagged by AI as toxic/profane content
+
+  @Column({ type: 'text', nullable: true })
+  censoredContent: string | null; // Content with bad words replaced by ***
+
+  @Column({ type: 'boolean', default: false })
+  isEdited: boolean; // Whether user has edited this comment
+
   @CreateDateColumn()
   createdAt: Date;
 

@@ -11,6 +11,8 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import * as bcrypt from 'bcrypt';
 import { EmailService } from '../config/email.service';
+import { ConfigService } from '@nestjs/config';
+import { SessionsService } from '../sessions/sessions.service';
 
 @Injectable()
 export class UsersService {
@@ -26,6 +28,8 @@ export class UsersService {
     @Inject(CACHE_MANAGER)
     private cacheManager: Cache,
     private emailService: EmailService,
+    private configService: ConfigService,
+    private sessionsService: SessionsService,
   ) { }
 
   async create(createUserDto: CreateUserDto) {
@@ -128,6 +132,7 @@ export class UsersService {
     const users = await this.userRepository
       .createQueryBuilder('user')
       .where('LOWER(user.username) LIKE :search', { search: searchTerm })
+      .andWhere('(user.isDeactivated = false OR user.isDeactivated IS NULL)')
       .orderBy('user.username', 'ASC')
       .limit(limit)
       .getMany();
@@ -333,7 +338,7 @@ export class UsersService {
     return updatedUser;
   }
 
-  async updateProfile(userId: number, updateData: { bio?: string; avatar?: string; gender?: string; dateOfBirth?: string }) {
+  async updateProfile(userId: number, updateData: { bio?: string; avatar?: string; gender?: string; dateOfBirth?: string; fullName?: string }) {
     try {
       console.log(`Updating profile for user ${userId}`, updateData);
 
@@ -358,6 +363,10 @@ export class UsersService {
         user.dateOfBirth = updateData.dateOfBirth ? new Date(updateData.dateOfBirth) : null;
       }
 
+      if (updateData.fullName !== undefined) {
+        user.fullName = updateData.fullName || null;
+      }
+
       const updatedUser = await this.userRepository.save(user);
       console.log(`Profile updated for user ${userId}`);
 
@@ -370,6 +379,7 @@ export class UsersService {
         id: updatedUser.id,
         username: updatedUser.username,
         email: updatedUser.email,
+        fullName: updatedUser.fullName,
         avatar: updatedUser.avatar,
         bio: updatedUser.bio,
         dateOfBirth: updatedUser.dateOfBirth,
@@ -423,6 +433,154 @@ export class UsersService {
     } catch (error) {
       console.error('Error getting username change info:', error);
       throw error;
+    }
+  }
+
+  // Get display name change info (7-day cooldown like TikTok)
+  async getDisplayNameChangeInfo(userId: number): Promise<{
+    canChange: boolean;
+    lastChangedAt: Date | null;
+    nextChangeDate: Date | null;
+    daysUntilChange: number;
+  }> {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const COOLDOWN_DAYS = 7;
+    const lastChangedAt = user.displayNameLastChangedAt;
+
+    if (!lastChangedAt) {
+      return { canChange: true, lastChangedAt: null, nextChangeDate: null, daysUntilChange: 0 };
+    }
+
+    const now = new Date();
+    const nextChangeDate = new Date(lastChangedAt);
+    nextChangeDate.setDate(nextChangeDate.getDate() + COOLDOWN_DAYS);
+
+    const canChange = now >= nextChangeDate;
+    const daysUntilChange = canChange ? 0 : Math.ceil((nextChangeDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+
+    return { canChange, lastChangedAt, nextChangeDate, daysUntilChange };
+  }
+
+  // Change display name (with validation and 7-day cooldown)
+  async changeDisplayName(userId: number, newDisplayName: string): Promise<{
+    success: boolean;
+    message: string;
+    user?: any;
+    daysUntilChange?: number;
+  }> {
+    try {
+      // Validate display name
+      const trimmed = newDisplayName.trim();
+      if (trimmed.length === 0) {
+        return { success: false, message: 'DISPLAY_NAME_EMPTY' };
+      }
+      if (trimmed.length < 2) {
+        return { success: false, message: 'DISPLAY_NAME_TOO_SHORT' };
+      }
+      if (trimmed.length > 30) {
+        return { success: false, message: 'DISPLAY_NAME_TOO_LONG' };
+      }
+      // Allow letters (including Unicode), numbers, spaces, dots, underscores
+      // Block special chars like < > " ' & ; etc.
+      const displayNameRegex = /^[\p{L}\p{N}\s._\-]+$/u;
+      if (!displayNameRegex.test(trimmed)) {
+        return { success: false, message: 'DISPLAY_NAME_INVALID_CHARS' };
+      }
+
+      // Check for profanity/toxic content using AI
+      const isToxic = await this.checkDisplayNameToxicity(trimmed);
+      if (isToxic) {
+        return { success: false, message: 'DISPLAY_NAME_INAPPROPRIATE' };
+      }
+
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) {
+        return { success: false, message: 'User not found' };
+      }
+
+      // Check if same as current
+      if (user.fullName === trimmed) {
+        return { success: false, message: 'DISPLAY_NAME_SAME' };
+      }
+
+      // Check cooldown (only if they've changed it before, not for first time setting)
+      if (user.fullName && user.displayNameLastChangedAt) {
+        const changeInfo = await this.getDisplayNameChangeInfo(userId);
+        if (!changeInfo.canChange) {
+          return {
+            success: false,
+            message: 'DISPLAY_NAME_COOLDOWN',
+            daysUntilChange: changeInfo.daysUntilChange,
+          };
+        }
+      }
+
+      user.fullName = trimmed;
+      user.displayNameLastChangedAt = new Date();
+      const updatedUser = await this.userRepository.save(user);
+
+      // Invalidate cache
+      await this.cacheManager.del(`user:id:${userId}`);
+      await this.cacheManager.del(`user:username:${user.username}`);
+
+      return {
+        success: true,
+        message: 'DISPLAY_NAME_CHANGED',
+        user: {
+          id: updatedUser.id,
+          username: updatedUser.username,
+          fullName: updatedUser.fullName,
+          displayNameLastChangedAt: updatedUser.displayNameLastChangedAt,
+        },
+      };
+    } catch (error) {
+      console.error('Error changing display name:', error);
+      return { success: false, message: 'DISPLAY_NAME_ERROR' };
+    }
+  }
+
+  // Remove display name (with 7-day cooldown - same as change)
+  async removeDisplayName(userId: number): Promise<{
+    success: boolean;
+    message: string;
+    daysUntilChange?: number;
+  }> {
+    try {
+      const user = await this.userRepository.findOne({ where: { id: userId } });
+      if (!user) return { success: false, message: 'User not found' };
+
+      // No display name to remove
+      if (!user.fullName) {
+        return { success: false, message: 'DISPLAY_NAME_EMPTY' };
+      }
+
+      // Check cooldown (same 7-day window as changing)
+      if (user.displayNameLastChangedAt) {
+        const changeInfo = await this.getDisplayNameChangeInfo(userId);
+        if (!changeInfo.canChange) {
+          return {
+            success: false,
+            message: 'DISPLAY_NAME_COOLDOWN',
+            daysUntilChange: changeInfo.daysUntilChange,
+          };
+        }
+      }
+
+      user.fullName = null;
+      user.displayNameLastChangedAt = new Date();
+      await this.userRepository.save(user);
+
+      await this.cacheManager.del(`user:id:${userId}`);
+      await this.cacheManager.del(`user:username:${user.username}`);
+
+      return { success: true, message: 'DISPLAY_NAME_REMOVED' };
+    } catch (error) {
+      console.error('Error removing display name:', error);
+      return { success: false, message: 'DISPLAY_NAME_ERROR' };
     }
   }
 
@@ -865,6 +1023,23 @@ export class UsersService {
       if (updateData.whoCanSendMessages !== undefined) settings.whoCanSendMessages = updateData.whoCanSendMessages;
       if (updateData.whoCanComment !== undefined) settings.whoCanComment = updateData.whoCanComment;
       if (updateData.filterComments !== undefined) settings.filterComments = updateData.filterComments;
+
+      // Push notification preferences (granular)
+      if (updateData.pushLikes !== undefined) settings.pushLikes = updateData.pushLikes;
+      if (updateData.pushComments !== undefined) settings.pushComments = updateData.pushComments;
+      if (updateData.pushNewFollowers !== undefined) settings.pushNewFollowers = updateData.pushNewFollowers;
+      if (updateData.pushMentions !== undefined) settings.pushMentions = updateData.pushMentions;
+      if (updateData.pushMessages !== undefined) settings.pushMessages = updateData.pushMessages;
+      if (updateData.pushProfileViews !== undefined) settings.pushProfileViews = updateData.pushProfileViews;
+
+      // In-app notification preferences (granular)
+      if (updateData.inAppLikes !== undefined) settings.inAppLikes = updateData.inAppLikes;
+      if (updateData.inAppComments !== undefined) settings.inAppComments = updateData.inAppComments;
+      if (updateData.inAppNewFollowers !== undefined) settings.inAppNewFollowers = updateData.inAppNewFollowers;
+      if (updateData.inAppMentions !== undefined) settings.inAppMentions = updateData.inAppMentions;
+      if (updateData.inAppMessages !== undefined) settings.inAppMessages = updateData.inAppMessages;
+      if (updateData.inAppProfileViews !== undefined) settings.inAppProfileViews = updateData.inAppProfileViews;
+
       console.log(`Updated settings for user ${userId}:`, JSON.stringify(settings));
     }
 
@@ -1214,6 +1389,13 @@ export class UsersService {
       user.deactivatedAt = new Date();
       await this.userRepository.save(user);
 
+      // Invalidate all active sessions (force logout everywhere)
+      try {
+        await this.sessionsService.logoutAllSessions(userId);
+      } catch (err) {
+        console.error(`Error invalidating sessions for user ${userId}:`, err);
+      }
+
       // Clear any cached data for this user
       await this.cacheManager.del(`user:${userId}`);
       await this.cacheManager.del(`user:settings:${userId}`);
@@ -1230,16 +1412,18 @@ export class UsersService {
     }
   }
 
-  async reactivateAccount(body: { email?: string; username?: string; password: string }): Promise<{ success: boolean; message: string; user?: any }> {
+  async reactivateAccount(body: { email?: string; username?: string; phone?: string; password: string }): Promise<{ success: boolean; message: string; user?: any }> {
     try {
-      const { email, username, password } = body;
+      const { email, username, phone, password } = body;
 
-      // Find user by email or username
+      // Find user by email, username, or phone
       let user: User | null = null;
       if (email) {
         user = await this.userRepository.findOne({ where: { email } });
       } else if (username) {
         user = await this.userRepository.findOne({ where: { username } });
+      } else if (phone) {
+        user = await this.userRepository.findOne({ where: { phoneNumber: phone } });
       }
 
       if (!user) {
@@ -1358,26 +1542,48 @@ export class UsersService {
     requesterId: number,
     targetUserId: number,
     action: 'view_video' | 'send_message' | 'comment',
-  ): Promise<{ allowed: boolean; reason?: string }> {
+  ): Promise<{ allowed: boolean; reason?: string; isPrivateAccount?: boolean; isDeactivated?: boolean }> {
     // Owner always has permission
     if (requesterId === targetUserId) {
       return { allowed: true };
     }
 
+    // Check if target user is deactivated
+    const targetUser = await this.userRepository.findOne({
+      where: { id: targetUserId },
+      select: ['id', 'isDeactivated'],
+    });
+    if (targetUser?.isDeactivated) {
+      return {
+        allowed: false,
+        reason: 'Tài khoản này đã bị vô hiệu hóa',
+        isDeactivated: true,
+      };
+    }
+
     const settings = await this.getPrivacySettings(targetUserId);
     
+    // Check if requester follows the target user
+    const isFollower = await this.followRepository.findOne({
+      where: { followerId: requesterId, followingId: targetUserId },
+    }).then(f => !!f);
+
     // Check if they are friends (mutual follow)
-    const isFriend = await this.followRepository.findOne({
-      where: [
-        { followerId: requesterId, followingId: targetUserId },
-      ],
-    }).then(async (follow1) => {
-      if (!follow1) return false;
-      const follow2 = await this.followRepository.findOne({
-        where: { followerId: targetUserId, followingId: requesterId },
-      });
-      return !!follow2;
-    });
+    const isFriend = isFollower
+      ? await this.followRepository.findOne({
+          where: { followerId: targetUserId, followingId: requesterId },
+        }).then(f => !!f)
+      : false;
+
+    // ============= ACCOUNT PRIVACY CHECK =============
+    // If account is private, only followers can interact
+    if (settings.accountPrivacy === 'private' && !isFollower) {
+      return {
+        allowed: false,
+        reason: 'Tài khoản riêng tư',
+        isPrivateAccount: true,
+      };
+    }
 
     let settingValue: string;
     switch (action) {
@@ -1422,5 +1628,129 @@ export class UsersService {
       default:
         return { allowed: true };
     }
+  }
+
+  // Get privacy settings for multiple users (batch)
+  async getPrivacySettingsBatch(userIds: number[]): Promise<Map<number, {
+    accountPrivacy: string;
+    whoCanViewVideos: string;
+    whoCanSendMessages: string;
+    whoCanComment: string;
+    filterComments: boolean;
+  }>> {
+    const result = new Map();
+    if (!userIds || userIds.length === 0) return result;
+
+    const uniqueIds = [...new Set(userIds)];
+    const settings = await this.userSettingsRepository.find({
+      where: uniqueIds.map(id => ({ userId: id })),
+      select: ['userId', 'accountPrivacy', 'whoCanViewVideos', 'whoCanSendMessages', 'whoCanComment', 'filterComments'],
+    });
+
+    for (const s of settings) {
+      result.set(s.userId, {
+        accountPrivacy: s.accountPrivacy ?? 'public',
+        whoCanViewVideos: s.whoCanViewVideos ?? 'everyone',
+        whoCanSendMessages: s.whoCanSendMessages ?? 'everyone',
+        whoCanComment: s.whoCanComment ?? 'everyone',
+        filterComments: s.filterComments ?? true,
+      });
+    }
+
+    // Fill defaults for users without settings
+    for (const id of uniqueIds) {
+      if (!result.has(id)) {
+        result.set(id, {
+          accountPrivacy: 'public',
+          whoCanViewVideos: 'everyone',
+          whoCanSendMessages: 'everyone',
+          whoCanComment: 'everyone',
+          filterComments: true,
+        });
+      }
+    }
+
+    return result;
+  }
+
+  // Get deactivation status for multiple users (batch) - used by video-service  
+  async getDeactivatedUserIds(userIds: number[]): Promise<number[]> {
+    if (!userIds || userIds.length === 0) return [];
+    
+    const uniqueIds = [...new Set(userIds)];
+    const users = await this.userRepository
+      .createQueryBuilder('user')
+      .select(['user.id'])
+      .where('user.id IN (:...ids)', { ids: uniqueIds })
+      .andWhere('user.isDeactivated = :deactivated', { deactivated: true })
+      .getMany();
+    
+    return users.map(u => u.id);
+  }
+
+  /**
+   * Check if a display name contains toxic/inappropriate content using Gemini AI
+   * Falls back to a simple bad words list if AI is unavailable
+   */
+  private async checkDisplayNameToxicity(name: string): Promise<boolean> {
+    if (!name || name.trim().length < 2) return false;
+
+    const apiKey = this.configService.get<string>('GEMINI_API_KEY');
+    if (!apiKey) {
+      return this.containsBadWords(name);
+    }
+
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [{
+                text: `You are a username/display name moderation classifier. Analyze the following display name and determine if it is inappropriate.
+
+Inappropriate names include: profanity, vulgar language, slurs, insults, hate speech, sexual content, threats, or offensive references in ANY language (Vietnamese, English, or others).
+
+Do NOT flag: normal names, nicknames, creative spellings, or casual/fun names that are not offensive.
+
+Display name: "${name}"
+
+Respond with ONLY one word: "TOXIC" or "SAFE". Nothing else.`,
+              }],
+            }],
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 10,
+            },
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        return this.containsBadWords(name);
+      }
+
+      const data = await response.json();
+      const result = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim()?.toUpperCase();
+      return result === 'TOXIC';
+    } catch (error) {
+      console.error('Display name toxicity check error:', error);
+      return this.containsBadWords(name);
+    }
+  }
+
+  /**
+   * Simple bad words check (fallback when AI is unavailable)
+   */
+  private containsBadWords(content: string): boolean {
+    const lower = content.toLowerCase();
+    const badWords = [
+      'đm', 'dcm', 'dm', 'đéo', 'địt', 'lồn', 'cặc', 'buồi', 'cc', 'cl', 'đĩ',
+      'đụ', 'vkl', 'vãi', 'khốn', 'súc vật', 'con mẹ',
+      'fuck', 'shit', 'bitch', 'dick', 'pussy', 'bastard', 'retard',
+    ];
+    return badWords.some(word => lower.includes(word));
   }
 }

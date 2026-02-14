@@ -58,6 +58,33 @@ export class CategoriesController {
     };
   }
 
+  // POST /categories/video/:videoId/ai-assign - Add AI-suggested categories (union merge)
+  @Post('video/:videoId/ai-assign')
+  async addAiCategoriesToVideo(
+    @Param('videoId') videoId: string,
+    @Body() body: { categoryIds: number[] },
+  ) {
+    const added = await this.categoriesService.addAiCategoriesToVideo(
+      videoId,
+      body.categoryIds,
+    );
+    return {
+      success: true,
+      data: added,
+      message: `Added ${added.length} AI-suggested categories to video`,
+    };
+  }
+
+  // GET /categories/video/:videoId/with-ai-info - Get categories with AI suggestion info
+  @Get('video/:videoId/with-ai-info')
+  async getVideoCategoriesWithAiInfo(@Param('videoId') videoId: string) {
+    const categories = await this.categoriesService.getVideoCategoriesWithAiInfo(videoId);
+    return {
+      success: true,
+      data: categories,
+    };
+  }
+
   // GET /categories/stats - Get category statistics
   @Get('stats/all')
   async getCategoryStats() {

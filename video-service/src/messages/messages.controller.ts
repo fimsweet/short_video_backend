@@ -4,6 +4,7 @@ import { diskStorage } from 'multer';
 import { extname, join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { MessagesService } from './messages.service';
+import { MessagesGateway } from './messages.gateway';
 
 // Ensure upload directory exists at startup
 const chatImagesPath = join(process.cwd(), 'uploads', 'chat_images');
@@ -18,7 +19,10 @@ if (!existsSync(chatImagesPath)) {
 
 @Controller('messages')
 export class MessagesController {
-  constructor(private readonly messagesService: MessagesService) {}
+  constructor(
+    private readonly messagesService: MessagesService,
+    private readonly messagesGateway: MessagesGateway,
+  ) {}
 
   @Post('send')
   async sendMessage(
@@ -26,6 +30,7 @@ export class MessagesController {
       senderId: string; 
       recipientId: string; 
       content: string;
+      senderName?: string;
       replyTo?: { id: string; content: string; senderId: string };
     },
   ) {
@@ -34,7 +39,25 @@ export class MessagesController {
       body.recipientId,
       body.content,
       body.replyTo,
+      body.senderName,
     );
+
+    // Emit WebSocket events so both parties get real-time updates
+    const messageData = {
+      id: message.id,
+      senderId: message.senderId,
+      recipientId: message.recipientId,
+      content: message.content,
+      createdAt: message.createdAt instanceof Date ? message.createdAt.toISOString() : message.createdAt,
+      isRead: message.isRead,
+      conversationId: message.conversationId,
+      replyToId: (message as any).replyToId || null,
+      replyToContent: (message as any).replyToContent || null,
+      replyToSenderId: (message as any).replyToSenderId || null,
+    };
+
+    this.messagesGateway.emitNewMessage(body.recipientId, body.senderId, messageData);
+
     return { success: true, data: message };
   }
 
@@ -226,6 +249,25 @@ export class MessagesController {
     @Query('userId') userId: string,
   ) {
     const result = await this.messagesService.deleteForEveryone(messageId, userId);
+    return result;
+  }
+
+  @Post(':messageId/edit')
+  async editMessage(
+    @Param('messageId') messageId: string,
+    @Query('userId') userId: string,
+    @Body() body: { content: string },
+  ) {
+    const result = await this.messagesService.editMessage(messageId, userId, body.content);
+
+    // Emit WebSocket events so both parties see the edit in real-time
+    if (result.success && result.editedMessage) {
+      const otherUserId = result.editedMessage.senderId === userId
+        ? result.editedMessage.recipientId
+        : result.editedMessage.senderId;
+      this.messagesGateway.emitMessageEdited(otherUserId, userId, result.editedMessage);
+    }
+
     return result;
   }
 

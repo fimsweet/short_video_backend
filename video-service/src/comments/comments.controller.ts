@@ -1,4 +1,4 @@
-﻿import { Controller, Post, Get, Delete, Param, Body, Query, UseInterceptors, UploadedFile } from '@nestjs/common';
+﻿import { Controller, Post, Get, Delete, Patch, Param, Body, Query, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
@@ -86,6 +86,15 @@ export class CommentsController {
   async deleteComment(@Param('commentId') commentId: string, @Param('userId') userId: string) {
     const deleted = await this.commentsService.deleteComment(commentId, userId);
     return { success: deleted };
+  }
+
+  @Patch(':commentId')
+  async editComment(
+    @Param('commentId') commentId: string,
+    @Body() body: { userId: string; content: string },
+  ) {
+    const updated = await this.commentsService.editComment(commentId, body.userId, body.content);
+    return updated;
   }
 
   @Post('like/toggle')

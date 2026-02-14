@@ -210,6 +210,7 @@ export class FollowsService {
     followerCount: number;
     mutualFriendsCount: number;
     reason: string;
+    mutualFollowerNames: string[];
   }[]> {
     // Get users the current user is already following
     const followingIds = await this.getFollowing(userId);
@@ -272,12 +273,42 @@ export class FollowsService {
       likedCreatorScore: number;
       reason: string;
       score: number;
+      mutualFollowerNames: string[];
     }>();
+
+    // Get mutual follower names for friends-of-friends
+    const mutualFollowerNamesMap = new Map<number, string[]>();
+    if (friendsOfFriends.length > 0 && followingIds.length > 0) {
+      try {
+        // Get who follows each suggested user among my followings
+        const mutualDetails = await this.followRepository
+          .createQueryBuilder('f')
+          .select('f.followingId', 'suggestedUserId')
+          .addSelect('u.username', 'followerUsername')
+          .innerJoin('user', 'u', 'u.id = f.followerId')
+          .where('f.followerId IN (:...followingIds)', { followingIds })
+          .andWhere('f.followingId IN (:...suggestedIds)', { 
+            suggestedIds: friendsOfFriends.map(f => parseInt(f.userId)) 
+          })
+          .getRawMany();
+
+        for (const detail of mutualDetails) {
+          const sid = parseInt(detail.suggestedUserId);
+          if (!mutualFollowerNamesMap.has(sid)) {
+            mutualFollowerNamesMap.set(sid, []);
+          }
+          mutualFollowerNamesMap.get(sid)!.push(detail.followerUsername);
+        }
+      } catch (e) {
+        console.error('Error getting mutual follower names:', e.message);
+      }
+    }
 
     // Add friends of friends (highest priority - social graph)
     for (const fof of friendsOfFriends) {
       const uid = parseInt(fof.userId);
       const mutualCount = parseInt(fof.mutualCount);
+      const names = mutualFollowerNamesMap.get(uid) || [];
       suggestionMap.set(uid, {
         mutualCount,
         followerCount: 0,
@@ -285,6 +316,7 @@ export class FollowsService {
         likedCreatorScore: 0,
         reason: 'mutual_friends',
         score: mutualCount * 100, // High weight for mutual friends
+        mutualFollowerNames: names,
       });
     }
 
@@ -306,6 +338,7 @@ export class FollowsService {
           likedCreatorScore: 0,
           reason: 'similar_taste',
           score: similar.commonLikes * 50,
+          mutualFollowerNames: [],
         });
       }
     }
@@ -328,6 +361,7 @@ export class FollowsService {
           likedCreatorScore: creator.likedVideosCount,
           reason: 'liked_their_content',
           score: creator.likedVideosCount * 75,
+          mutualFollowerNames: [],
         });
       }
     }
@@ -348,6 +382,7 @@ export class FollowsService {
           likedCreatorScore: 0,
           reason: 'popular',
           score: Math.min(followerCount, 100) * 10,
+          mutualFollowerNames: [],
         });
       }
     }
@@ -360,24 +395,9 @@ export class FollowsService {
     const suggestionIds = sortedSuggestions.map(([id]) => id);
     
     if (suggestionIds.length === 0) {
-      // Fallback: get any users not followed
-      const fallbackUsers = await this.userRepository
-        .createQueryBuilder('u')
-        .where('u.id NOT IN (:...excludeIds)', { excludeIds })
-        .andWhere('u.isDeactivated = false OR u.isDeactivated IS NULL')
-        .orderBy('u.createdAt', 'DESC')
-        .limit(limit)
-        .getMany();
-
-      return fallbackUsers.map(user => ({
-        id: user.id,
-        username: user.username,
-        fullName: user.fullName,
-        avatar: user.avatar,
-        followerCount: 0,
-        mutualFriendsCount: 0,
-        reason: 'suggested',
-      }));
+      // No meaningful suggestions - return empty array
+      // Frontend will show appropriate empty state UI
+      return [];
     }
 
     const users = await this.userRepository
@@ -400,12 +420,11 @@ export class FollowsService {
           followerCount: suggestion.followerCount,
           mutualFriendsCount: suggestion.mutualCount,
           reason: suggestion.reason,
+          mutualFollowerNames: suggestion.mutualFollowerNames.slice(0, 3),
         };
       });
 
     return result;
-
-    return result.slice(0, limit);
   }
 
   /**

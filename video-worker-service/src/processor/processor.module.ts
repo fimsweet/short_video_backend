@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { HttpModule } from '@nestjs/axios';
 import { VideoProcessorService } from './video.processor';
+import { AiAnalysisService } from '../config/ai-analysis.service';
 import { Video } from '../entities/video.entity';
 
 @Module({
@@ -9,6 +10,6 @@ import { Video } from '../entities/video.entity';
     TypeOrmModule.forFeature([Video]),
     HttpModule,
   ],
-  providers: [VideoProcessorService],
+  providers: [VideoProcessorService, AiAnalysisService],
 })
 export class ProcessorModule {}

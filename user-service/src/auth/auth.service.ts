@@ -72,6 +72,26 @@ export class AuthService {
     let user = await this.usersService.findByProviderId('google', googleUser.providerId);
 
     if (user) {
+      // Check if account is deactivated
+      if (user.isDeactivated) {
+        let daysRemaining = 30;
+        if (user.deactivatedAt) {
+          const daysSinceDeactivation = Math.floor(
+            (Date.now() - new Date(user.deactivatedAt).getTime()) / (1000 * 60 * 60 * 24)
+          );
+          daysRemaining = Math.max(0, 30 - daysSinceDeactivation);
+          if (daysRemaining <= 0) {
+            throw new UnauthorizedException('Tài khoản đã bị xóa vĩnh viễn do không được kích hoạt lại trong 30 ngày');
+          }
+        }
+        return {
+          requiresReactivation: true,
+          userId: user.id,
+          daysRemaining,
+          message: 'Tài khoản đang bị vô hiệu hóa. Bạn có muốn kích hoạt lại?',
+        };
+      }
+
       // Check if 2FA is enabled
       if (user.twoFactorEnabled && user.twoFactorMethods && user.twoFactorMethods.length > 0) {
         return {
@@ -97,6 +117,26 @@ export class AuthService {
     if (googleUser.email) {
       const existingUser = await this.usersService.findByEmail(googleUser.email);
       if (existingUser) {
+        // Check if account is deactivated
+        if (existingUser.isDeactivated) {
+          let daysRemaining = 30;
+          if (existingUser.deactivatedAt) {
+            const daysSinceDeactivation = Math.floor(
+              (Date.now() - new Date(existingUser.deactivatedAt).getTime()) / (1000 * 60 * 60 * 24)
+            );
+            daysRemaining = Math.max(0, 30 - daysSinceDeactivation);
+            if (daysRemaining <= 0) {
+              throw new UnauthorizedException('Tài khoản đã bị xóa vĩnh viễn do không được kích hoạt lại trong 30 ngày');
+            }
+          }
+          return {
+            requiresReactivation: true,
+            userId: existingUser.id,
+            daysRemaining,
+            message: 'Tài khoản đang bị vô hiệu hóa. Bạn có muốn kích hoạt lại?',
+          };
+        }
+
         // Check if 2FA is enabled
         if (existingUser.twoFactorEnabled && existingUser.twoFactorMethods && existingUser.twoFactorMethods.length > 0) {
           return {
@@ -253,6 +293,26 @@ export class AuthService {
         message: 'Phone not registered',
         isNewUser: true,
         phone: phone,
+      };
+    }
+
+    // Check if account is deactivated
+    if (user.isDeactivated) {
+      let daysRemaining = 30;
+      if (user.deactivatedAt) {
+        const daysSinceDeactivation = Math.floor(
+          (Date.now() - new Date(user.deactivatedAt).getTime()) / (1000 * 60 * 60 * 24)
+        );
+        daysRemaining = Math.max(0, 30 - daysSinceDeactivation);
+        if (daysRemaining <= 0) {
+          throw new UnauthorizedException('Tài khoản đã bị xóa vĩnh viễn do không được kích hoạt lại trong 30 ngày');
+        }
+      }
+      return {
+        requiresReactivation: true,
+        userId: user.id,
+        daysRemaining,
+        message: 'Tài khoản đang bị vô hiệu hóa. Bạn có muốn kích hoạt lại?',
       };
     }
 

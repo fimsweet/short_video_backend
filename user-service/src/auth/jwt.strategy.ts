@@ -22,6 +22,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!user) {
       throw new UnauthorizedException();
     }
+    // Block deactivated users from accessing any authenticated endpoint
+    if (user.isDeactivated) {
+      throw new UnauthorizedException('Tài khoản đã bị vô hiệu hóa');
+    }
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { password, ...result } = user;
     // Add userId to the request user object for controllers

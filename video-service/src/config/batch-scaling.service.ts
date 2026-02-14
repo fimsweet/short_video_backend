@@ -157,8 +157,8 @@ export class BatchScalingService implements OnModuleInit, OnModuleDestroy {
     if (!this.isEnabled) return;
 
     try {
-      // 1. Get current queue depth from RabbitMQ
-      const queueDepth = await this.getQueueDepth();
+      // 1. Get current queue depth + consumer count from RabbitMQ
+      const { messageCount: queueDepth, consumerCount } = await this.getQueueDepth();
       
       // 2. Get current Batch job status
       const { running, pending } = await this.getBatchJobCounts();
@@ -174,33 +174,38 @@ export class BatchScalingService implements OnModuleInit, OnModuleDestroy {
       };
 
       this.logger.log(
-        `[MONITOR] Queue: ${queueDepth} msgs | Batch: ${running} running, ${pending} pending`
+        `[MONITOR] Queue: ${queueDepth} msgs, ${consumerCount} consumers | Batch: ${running} running, ${pending} pending`
       );
 
       // 4. Scaling decision
       // ============================================
-      // SMART SCALING LOGIC
+      // SMART SCALING LOGIC (Consumer-Aware)
       // ============================================
-      // Local EC2 worker: prefetch=1 (handles 1 video at a time)
-      // When queueDepth >= 2, at least 1 video is WAITING beyond local capacity.
-      // We dispatch to Batch so that waiting video gets processed immediately.
+      // When local worker is RUNNING (consumerCount > 0):
+      //   Threshold = 2 (local handles 1, excess goes to Batch)
+      //   excessMessages = queueDepth - LOCAL_WORKER_CONCURRENCY
       //
-      // Batch workers use prefetch=2 (stronger instances), so:
-      //   workersNeeded = ceil(excessMessages / BATCH_WORKER_CONCURRENCY)
-      // Subtract workers already running/pending to avoid over-scaling.
+      // When local worker is STOPPED (consumerCount = 0):
+      //   Threshold = 1 (NO local worker → Batch must handle ALL)
+      //   excessMessages = queueDepth (everything needs Batch)
       //
-      // Example: Queue has 7 messages, local handles 1
-      //   excessMessages = 7 - 1 = 6
-      //   workersNeeded = ceil(6/2) = 3
-      //   currentWorkers = 1 (running) + 0 (pending) = 1
-      //   workersToAdd = min(3 - 1, 10 - 1) = 2
+      // This ensures Batch jobs are dispatched even for a single
+      // video when the local worker is down.
       // ============================================
+      const localWorkerActive = consumerCount > 0;
+      const effectiveThreshold = localWorkerActive ? this.QUEUE_THRESHOLD : 1;
+      const effectiveLocalCapacity = localWorkerActive ? this.LOCAL_WORKER_CONCURRENCY : 0;
+
+      if (!localWorkerActive && queueDepth > 0) {
+        this.logger.warn(`[MONITOR] No local consumers detected! Threshold lowered to 1`);
+      }
+
       const now = Date.now();
       const cooldownElapsed = (now - this.lastScaleTime) / 1000 > this.COOLDOWN_SECONDS;
 
-      if (queueDepth >= this.QUEUE_THRESHOLD && cooldownElapsed) {
-        // Subtract what local worker can handle, then calculate Batch workers needed
-        const excessMessages = Math.max(0, queueDepth - this.LOCAL_WORKER_CONCURRENCY);
+      if (queueDepth >= effectiveThreshold && cooldownElapsed) {
+        // Subtract what local worker can handle (0 if stopped), then calculate Batch workers needed
+        const excessMessages = Math.max(0, queueDepth - effectiveLocalCapacity);
         const totalWorkersNeeded = Math.ceil(excessMessages / this.BATCH_WORKER_CONCURRENCY);
         const currentWorkers = running + pending;
         const workersToAdd = Math.min(
@@ -229,12 +234,14 @@ export class BatchScalingService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ============================================
-  // GET RABBITMQ QUEUE DEPTH
+  // GET RABBITMQ QUEUE DEPTH + CONSUMER COUNT
   // ============================================
-  // Connects to RabbitMQ Management API or directly to check
-  // how many messages are waiting in the processing queue
+  // Connects to RabbitMQ to check how many messages are
+  // waiting and how many consumers are active.
+  // Consumer count is critical: when local worker is stopped,
+  // we need to lower the threshold to dispatch to Batch sooner.
   // ============================================
-  private async getQueueDepth(): Promise<number> {
+  private async getQueueDepth(): Promise<{ messageCount: number; consumerCount: number }> {
     let connection: amqp.Connection | null = null;
     let channel: amqp.Channel | null = null;
 
@@ -246,11 +253,14 @@ export class BatchScalingService implements OnModuleInit, OnModuleDestroy {
       const queueInfo = await channel.checkQueue(this.queueName);
       
       this.logger.log(`[QUEUE] Ready: ${queueInfo.messageCount}, Consumers: ${queueInfo.consumerCount}`);
-      return queueInfo.messageCount;
+      return {
+        messageCount: queueInfo.messageCount,
+        consumerCount: queueInfo.consumerCount,
+      };
     } catch (error) {
       this.logger.error(`[QUEUE] Failed to check queue depth: ${error.message}`);
       this.logger.error(`[QUEUE] RabbitMQ URL: ${this.rabbitMQUrl.replace(/\/\/.*:.*@/, '//*****:*****@')}`);
-      return 0;
+      return { messageCount: 0, consumerCount: 0 };
     } finally {
       try {
         if (channel) await channel.close();

@@ -1,5 +1,6 @@
-import { IsString, IsOptional, IsNotEmpty, IsArray, IsNumber } from 'class-validator';
+import { IsString, IsOptional, IsNotEmpty, IsArray, IsNumber, IsEnum, IsBoolean } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { VideoVisibility } from '../../entities/video.entity';
 
 export class UploadVideoDto {
   @IsString()
@@ -38,4 +39,27 @@ export class UploadVideoDto {
     return value;
   })
   thumbnailTimestamp?: number; // Timestamp in seconds for auto-generated thumbnail frame
+
+  @IsOptional()
+  @IsEnum(VideoVisibility)
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      const lower = value.toLowerCase();
+      if (Object.values(VideoVisibility).includes(lower as VideoVisibility)) {
+        return lower;
+      }
+    }
+    return value;
+  })
+  visibility?: VideoVisibility; // public, friends, private
+
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      return value.toLowerCase() === 'true';
+    }
+    return value;
+  })
+  allowComments?: boolean; // default true
 }

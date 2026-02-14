@@ -6,9 +6,13 @@ import { User } from '../entities/user.entity';
 import { BlockedUser } from '../entities/blocked-user.entity';
 import { UserSettings } from '../entities/user-settings.entity';
 import { Follow } from '../entities/follow.entity';
+import { SessionsModule } from '../sessions/sessions.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, BlockedUser, UserSettings, Follow])],
+  imports: [
+    TypeOrmModule.forFeature([User, BlockedUser, UserSettings, Follow]),
+    SessionsModule,
+  ],
   controllers: [UsersController],
   providers: [UsersService],
   exports: [UsersService],

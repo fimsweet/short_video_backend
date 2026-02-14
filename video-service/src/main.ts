@@ -79,7 +79,7 @@ async function bootstrap() {
 
   console.log('Chat images served from:', chatImagesPath);
 
-  const port = process.env.PORT || 3001;
+  const port = process.env.PORT || 3002;
   await app.listen(port);
 
   console.log(`Video service is running on http://localhost:${port}`);

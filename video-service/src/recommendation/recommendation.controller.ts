@@ -13,8 +13,13 @@ export class RecommendationController {
   async getForYouFeed(
     @Param('userId', ParseIntPipe) userId: number,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query('excludeIds') excludeIds?: string,
   ) {
-    const videos = await this.recommendationService.getRecommendedVideos(userId, limit);
+    // Parse comma-separated exclude IDs (videos user has already seen)
+    const excludeIdList = excludeIds
+      ? excludeIds.split(',').map(id => id.trim()).filter(id => id.length > 0)
+      : [];
+    const videos = await this.recommendationService.getRecommendedVideos(userId, limit, excludeIdList);
     return {
       success: true,
       data: videos,

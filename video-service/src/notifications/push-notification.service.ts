@@ -15,7 +15,7 @@ export class PushNotificationService {
   constructor(private readonly configService: ConfigService) {
     this.userServiceUrl = this.configService.get<string>(
       'USER_SERVICE_URL',
-      'http://localhost:3001',
+      'http://localhost:3000',
     );
   }
 
@@ -49,6 +49,23 @@ export class PushNotificationService {
   }
 
   /**
+   * Check if a specific notification type is enabled for a user (in-app)
+   */
+  async isNotificationEnabled(userId: string, type: string): Promise<boolean> {
+    try {
+      const response = await fetch(
+        `${this.userServiceUrl}/push/preferences/${userId}/${type}`,
+      );
+      if (!response.ok) return true; // Default enabled on error
+      const result = await response.json();
+      return result.enabled ?? true;
+    } catch (error) {
+      console.error('[ERROR] Error checking notification preference:', error);
+      return true; // Default enabled on error
+    }
+  }
+
+  /**
    * Send notification for new message
    */
   async sendMessageNotification(
@@ -56,6 +73,7 @@ export class PushNotificationService {
     senderName: string,
     messagePreview: string,
     conversationId: string,
+    senderId?: string,
   ): Promise<boolean> {
     return this.sendToUser({
       userId: recipientId,
@@ -66,7 +84,8 @@ export class PushNotificationService {
       data: {
         type: 'message',
         conversationId,
-        senderId: senderName,
+        senderId: senderId || senderName,
+        senderName,
       },
     });
   }

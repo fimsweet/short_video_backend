@@ -213,6 +213,30 @@ services:
     networks:
       - backend
 
+  # ============================================
+  # API GATEWAY (Nginx)
+  # ============================================
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      user-service:
+        condition: service_started
+      video-service:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - backend
+
 # KHÔNG CẦN khai báo volumes vì dùng bind mount trực tiếp
 
 networks:

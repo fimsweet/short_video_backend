@@ -90,20 +90,12 @@ export class AnalyticsService {
             likeCounts.forEach(lc => videoLikeCounts.set(lc.videoId, parseInt(lc.count)));
         }
 
-        // Build base URL for thumbnails
-        const baseUrl = this.configService.get<string>('VIDEO_SERVICE_URL') || 'http://localhost:3002';
-
         // Get all videos with full stats for sorting
         const allVideos = videos.map(v => {
-            // Fix thumbnail URL - ensure it's a full URL
-            let thumbnailUrl = v.thumbnailUrl;
-            if (thumbnailUrl && !thumbnailUrl.startsWith('http')) {
-                thumbnailUrl = `${baseUrl}${thumbnailUrl.startsWith('/') ? '' : '/'}${thumbnailUrl}`;
-            }
             return {
                 id: v.id,
                 title: v.title || 'Untitled',
-                thumbnailUrl,
+                thumbnailUrl: v.thumbnailUrl || null,
                 views: v.viewCount || 0,
                 likes: videoLikeCounts.get(v.id) || 0,
                 createdAt: v.createdAt,

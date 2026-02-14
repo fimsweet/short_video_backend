@@ -5,3 +5,4 @@ processed_videos/*
 !processed_videos/.gitkeep
 *.log
 .DS_Store
+.env.production

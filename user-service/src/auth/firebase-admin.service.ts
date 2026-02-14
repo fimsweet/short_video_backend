@@ -11,25 +11,27 @@ export class FirebaseAdminService {
     constructor(private configService: ConfigService) {
         // Initialize Firebase Admin only if not already initialized
         if (admin.apps.length === 0) {
-            const serviceAccountPath = this.configService.get<string>('FIREBASE_SERVICE_ACCOUNT_PATH');
+            const serviceAccountEnvPath = this.configService.get<string>('FIREBASE_SERVICE_ACCOUNT_PATH');
+            
+            // Resolve service account path: env var or default to project root
+            const serviceAccountPath = serviceAccountEnvPath 
+                ? path.resolve(process.cwd(), serviceAccountEnvPath)
+                : path.join(process.cwd(), 'firebase-service-account.json');
 
-            if (serviceAccountPath) {
-                // Resolve absolute path from project root
-                const absolutePath = path.resolve(process.cwd(), serviceAccountPath);
-                console.log(`Looking for Firebase service account at: ${absolutePath}`);
+            console.log(`Looking for Firebase service account at: ${serviceAccountPath}`);
 
-                if (fs.existsSync(absolutePath)) {
-                    // Read and parse the JSON file
-                    const serviceAccount = JSON.parse(fs.readFileSync(absolutePath, 'utf8'));
+            if (fs.existsSync(serviceAccountPath)) {
+                try {
+                    const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
                     this.firebaseApp = admin.initializeApp({
                         credential: admin.credential.cert(serviceAccount),
                     });
-                    console.log('Firebase Admin initialized with service account');
-                } else {
-                    console.warn(`Firebase service account file not found at: ${absolutePath}`);
+                    console.log(`Firebase Admin initialized with service account (project: ${serviceAccount.project_id})`);
+                } catch (error) {
+                    console.error('Failed to parse Firebase service account file:', error);
                 }
             } else {
-                // Initialize with environment variables
+                // Fallback: Initialize with individual environment variables
                 const projectId = this.configService.get<string>('FIREBASE_PROJECT_ID');
                 const clientEmail = this.configService.get<string>('FIREBASE_CLIENT_EMAIL');
                 const privateKey = this.configService.get<string>('FIREBASE_PRIVATE_KEY')?.replace(/\\n/g, '\n');
@@ -44,7 +46,7 @@ export class FirebaseAdminService {
                     });
                     console.log('Firebase Admin initialized with environment variables');
                 } else {
-                    console.warn('Firebase Admin not configured - phone auth will not work');
+                    console.warn(`Firebase service account file not found at: ${serviceAccountPath} and no env vars configured - phone auth & FCM will not work`);
                 }
             }
         } else {

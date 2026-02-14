@@ -41,11 +41,11 @@ export class Conversation {
   themeColorBy2: string;
 
   // Nickname for the other participant (set by each user)
-  @Column({ nullable: true })
-  nicknameBy1: string; // nickname for participant2, set by participant1
+  @Column({ type: 'varchar', length: 100, nullable: true, default: null })
+  nicknameBy1: string | null; // nickname for participant2, set by participant1
 
-  @Column({ nullable: true })
-  nicknameBy2: string; // nickname for participant1, set by participant2
+  @Column({ type: 'varchar', length: 100, nullable: true, default: null })
+  nicknameBy2: string | null; // nickname for participant1, set by participant2
 
   // Auto-translate settings for each participant
   @Column({ default: false })
