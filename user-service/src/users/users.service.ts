@@ -1023,6 +1023,14 @@ export class UsersService {
       if (updateData.whoCanSendMessages !== undefined) settings.whoCanSendMessages = updateData.whoCanSendMessages;
       if (updateData.whoCanComment !== undefined) settings.whoCanComment = updateData.whoCanComment;
       if (updateData.filterComments !== undefined) settings.filterComments = updateData.filterComments;
+      
+      // Follow approval toggle
+      if (updateData.requireFollowApproval !== undefined) settings.requireFollowApproval = updateData.requireFollowApproval;
+
+      // TikTok-style list privacy
+      if (updateData.whoCanViewFollowingList !== undefined) settings.whoCanViewFollowingList = updateData.whoCanViewFollowingList;
+      if (updateData.whoCanViewFollowersList !== undefined) settings.whoCanViewFollowersList = updateData.whoCanViewFollowersList;
+      if (updateData.whoCanViewLikedVideos !== undefined) settings.whoCanViewLikedVideos = updateData.whoCanViewLikedVideos;
 
       // Push notification preferences (granular)
       if (updateData.pushLikes !== undefined) settings.pushLikes = updateData.pushLikes;
@@ -1048,6 +1056,24 @@ export class UsersService {
     // Invalidate cache
     await this.cacheManager.del(`user:settings:${userId}`);
     console.log(`Settings saved and cache invalidated for user ${userId}`);
+
+    // Auto-approve all pending follow requests when user turns OFF requireFollowApproval
+    if (updateData.requireFollowApproval === false) {
+      try {
+        const pendingRequests = await this.followRepository.find({
+          where: { followingId: userId, status: 'pending' },
+        });
+        if (pendingRequests.length > 0) {
+          for (const request of pendingRequests) {
+            request.status = 'accepted';
+          }
+          await this.followRepository.save(pendingRequests);
+          console.log(`Auto-approved ${pendingRequests.length} pending follow requests for user ${userId}`);
+        }
+      } catch (e) {
+        console.error('Error auto-approving pending requests:', e);
+      }
+    }
 
     return updatedSettings;
   }
@@ -1317,9 +1343,17 @@ export class UsersService {
     }
   }
 
-  // Get user's online status
-  async getOnlineStatus(userId: number): Promise<{ isOnline: boolean; lastSeen: Date | null; statusText: string }> {
+  // Get user's online status (privacy-aware)
+  async getOnlineStatus(userId: number, requesterId?: number): Promise<{ isOnline: boolean; lastSeen: Date | null; statusText: string }> {
     try {
+      // Check if user has disabled online status visibility
+      if (requesterId && requesterId !== userId) {
+        const settings = await this.userSettingsRepository.findOne({ where: { userId } });
+        if (settings && !settings.showOnlineStatus) {
+          return { isOnline: false, lastSeen: null, statusText: 'Offline' };
+        }
+      }
+
       const user = await this.userRepository.findOne({
         where: { id: userId },
         select: ['id', 'lastSeen'],
@@ -1522,10 +1556,11 @@ export class UsersService {
     whoCanSendMessages: string;
     whoCanComment: string;
     filterComments: boolean;
+    showOnlineStatus: boolean;
   }> {
     const settings = await this.userSettingsRepository.findOne({
       where: { userId },
-      select: ['accountPrivacy', 'whoCanViewVideos', 'whoCanSendMessages', 'whoCanComment', 'filterComments'],
+      select: ['accountPrivacy', 'whoCanViewVideos', 'whoCanSendMessages', 'whoCanComment', 'filterComments', 'showOnlineStatus'],
     });
 
     return {
@@ -1534,6 +1569,7 @@ export class UsersService {
       whoCanSendMessages: settings?.whoCanSendMessages ?? 'everyone',
       whoCanComment: settings?.whoCanComment ?? 'everyone',
       filterComments: settings?.filterComments ?? true,
+      showOnlineStatus: settings?.showOnlineStatus ?? true,
     };
   }
 
@@ -1546,6 +1582,20 @@ export class UsersService {
     // Owner always has permission
     if (requesterId === targetUserId) {
       return { allowed: true };
+    }
+
+    // Check if either user has blocked the other
+    const [requesterBlockedTarget, targetBlockedRequester] = await Promise.all([
+      this.isUserBlocked(requesterId, targetUserId),
+      this.isUserBlocked(targetUserId, requesterId),
+    ]);
+    if (requesterBlockedTarget || targetBlockedRequester) {
+      return {
+        allowed: false,
+        reason: targetBlockedRequester 
+          ? 'Người dùng này đã chặn bạn'
+          : 'Bạn đã chặn người dùng này',
+      };
     }
 
     // Check if target user is deactivated
@@ -1622,7 +1672,7 @@ export class UsersService {
           reason: action === 'view_video' 
             ? 'Video này ở chế độ riêng tư'
             : action === 'send_message'
-            ? 'Người dùng đã tắt nhận tin nhắn'
+            ? 'Hiện không thể nhắn tin với người này ngay lập tức'
             : 'Người dùng đã tắt bình luận',
         };
       default:

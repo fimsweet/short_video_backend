@@ -41,6 +41,15 @@ export class LikesController {
   }
 
   /**
+   * Get total likes received by a user across all their videos
+   */
+  @Get('received/:userId')
+  async getTotalReceivedLikes(@Param('userId') userId: string) {
+    const count = await this.likesService.getTotalReceivedLikes(userId);
+    return { count };
+  }
+
+  /**
    * Get users with similar taste (liked same videos)
    */
   @Get('similar-users/:userId')

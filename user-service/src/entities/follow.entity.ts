@@ -14,6 +14,9 @@ export class Follow {
   @Index()
   followingId: number; // User being followed
 
+  @Column({ default: 'accepted' })
+  status: string; // 'accepted' or 'pending'
+
   @CreateDateColumn()
   createdAt: Date;
 }

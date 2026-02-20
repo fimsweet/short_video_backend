@@ -75,8 +75,8 @@ export class SavedVideosService {
       }),
     );
 
-    // Filter out null values (deleted videos)
-    const validVideos = videosWithDetails.filter(v => v !== null);
+    // Filter out null values (deleted videos) and hidden videos
+    const validVideos = videosWithDetails.filter(v => v !== null && !v.isHidden);
     console.log(`[RETURN] Returning ${validVideos.length} saved videos with full details`);
     
     return validVideos;

@@ -2,6 +2,8 @@ import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Index } from 
 
 export enum NotificationType {
   FOLLOW = 'follow',
+  FOLLOW_REQUEST = 'follow_request',
+  FOLLOW_REQUEST_ACCEPTED = 'follow_request_accepted',
   COMMENT = 'comment',
   LIKE = 'like',
   MENTION = 'mention',

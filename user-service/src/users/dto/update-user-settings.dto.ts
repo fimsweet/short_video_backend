@@ -5,6 +5,7 @@ export class UpdateUserSettingsDto {
   emailNotifications?: boolean;
   loginAlertsEnabled?: boolean; // Push notifications for new login events
   accountPrivacy?: string;
+  requireFollowApproval?: boolean;
   showOnlineStatus?: boolean;
   autoplayVideos?: boolean;
   videoQuality?: string;
@@ -16,6 +17,11 @@ export class UpdateUserSettingsDto {
   whoCanSendMessages?: string;
   whoCanComment?: string;
   filterComments?: boolean;
+
+  // TikTok-style list privacy
+  whoCanViewFollowingList?: string;
+  whoCanViewFollowersList?: string;
+  whoCanViewLikedVideos?: string;
 
   // Push notification preferences (granular)
   pushLikes?: boolean;

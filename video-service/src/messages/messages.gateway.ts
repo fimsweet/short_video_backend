@@ -10,6 +10,7 @@
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { MessagesService } from './messages.service';
+import { ConfigService } from '@nestjs/config';
 
 @WebSocketGateway({
   namespace: '/chat',
@@ -25,7 +26,13 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   // Track online users: userId -> last activity timestamp
   private onlineUsers: Map<string, Date> = new Map();
 
-  constructor(private messagesService: MessagesService) {}
+  // Track users who have hidden their online status (showOnlineStatus = false)
+  private hiddenStatusUsers: Set<string> = new Set();
+
+  constructor(
+    private messagesService: MessagesService,
+    private configService: ConfigService,
+  ) {}
 
   afterInit() {
     console.log('WebSocket Gateway initialized');
@@ -58,7 +65,7 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   @SubscribeMessage('join')
-  handleJoin(@ConnectedSocket() client: Socket, @MessageBody() data: { userId: string }) {
+  async handleJoin(@ConnectedSocket() client: Socket, @MessageBody() data: { userId: string }) {
     if (!data.userId) {
       return { success: false, error: 'userId required' };
     }
@@ -80,6 +87,20 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     client.join(`user_${data.userId}`);
     console.log(`User ${data.userId} joined with socket ${client.id}`);
     
+    // Check user's showOnlineStatus setting from user-service on first connect
+    // This ensures hiddenStatusUsers is repopulated after server restart
+    if (wasOffline && !this.hiddenStatusUsers.has(data.userId)) {
+      try {
+        const showOnlineStatus = await this.fetchUserShowOnlineStatus(data.userId);
+        if (!showOnlineStatus) {
+          this.hiddenStatusUsers.add(data.userId);
+          console.log(`User ${data.userId} has showOnlineStatus=false, added to hidden set`);
+        }
+      } catch (error) {
+        console.error(`Failed to check showOnlineStatus for user ${data.userId}:`, error);
+      }
+    }
+
     // Broadcast online status if user just came online
     if (wasOffline) {
       this.broadcastOnlineStatus(data.userId, true);
@@ -89,8 +110,27 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     return { success: true };
   }
 
+  // Fetch user's showOnlineStatus setting from user-service
+  private async fetchUserShowOnlineStatus(userId: string): Promise<boolean> {
+    try {
+      const userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3000';
+      const response = await fetch(`${userServiceUrl}/users/privacy/${userId}`);
+      if (response.ok) {
+        const data = await response.json();
+        return data.settings?.showOnlineStatus !== false;
+      }
+    } catch (error) {
+      console.error(`Failed to fetch showOnlineStatus for user ${userId}:`, error);
+    }
+    return true; // Default to showing online status if fetch fails
+  }
+
   // Broadcast user online/offline status to subscribers and globally
   private broadcastOnlineStatus(userId: string, isOnline: boolean) {
+    // If user has hidden their online status, always broadcast as offline
+    if (this.hiddenStatusUsers.has(userId) && isOnline) {
+      return; // Don't broadcast "online" for hidden users
+    }
     const payload = {
       userId,
       isOnline,
@@ -105,6 +145,16 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   // Get online status of a specific user
   @SubscribeMessage('getOnlineStatus')
   handleGetOnlineStatus(@MessageBody() data: { userId: string }) {
+    // If user has hidden their online status, always return offline
+    if (this.hiddenStatusUsers.has(data.userId)) {
+      return {
+        success: true,
+        userId: data.userId,
+        isOnline: false,
+        lastSeen: null,
+      };
+    }
+
     const isOnline = this.onlineUsers.has(data.userId) && 
                      this.userSockets.has(data.userId) && 
                      (this.userSockets.get(data.userId)?.size || 0) > 0;
@@ -121,6 +171,14 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   @SubscribeMessage('getMultipleOnlineStatus')
   handleGetMultipleOnlineStatus(@MessageBody() data: { userIds: string[] }) {
     const statuses = data.userIds.map(userId => {
+      // If user has hidden their online status, always return offline
+      if (this.hiddenStatusUsers.has(userId)) {
+        return {
+          userId,
+          isOnline: false,
+          lastSeen: null,
+        };
+      }
       const isOnline = this.onlineUsers.has(userId) && 
                        this.userSockets.has(userId) && 
                        (this.userSockets.get(userId)?.size || 0) > 0;
@@ -139,6 +197,16 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   handleSubscribeOnlineStatus(@ConnectedSocket() client: Socket, @MessageBody() data: { userId: string }) {
     client.join(`online_status_${data.userId}`);
     
+    // If user has hidden their online status, always return offline
+    if (this.hiddenStatusUsers.has(data.userId)) {
+      client.emit('userOnlineStatus', {
+        userId: data.userId,
+        isOnline: false,
+        timestamp: new Date().toISOString(),
+      });
+      return { success: true };
+    }
+
     // Send current status immediately
     const isOnline = this.onlineUsers.has(data.userId) && 
                      this.userSockets.has(data.userId) && 
@@ -282,5 +350,52 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   emitMessageEdited(recipientId: string, senderId: string, editedMessage: any) {
     this.server.to(`user_${recipientId}`).emit('messageEdited', editedMessage);
     this.server.to(`user_${senderId}`).emit('messageEdited', editedMessage);
+  }
+
+  /**
+   * Emit privacy settings changed event to all connected clients
+   * Used when a user updates messaging/online status privacy settings
+   */
+  emitPrivacySettingsChanged(userId: string, settings: { whoCanSendMessages?: string; showOnlineStatus?: boolean }) {
+    // Broadcast to all connected clients so active chat screens can re-check permissions
+    this.server.emit('privacySettingsChanged', {
+      userId,
+      ...settings,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  /**
+   * Emit newNotification event to recipient via WebSocket.
+   * Provides instant badge update without relying on FCM push delivery timing.
+   */
+  emitNewNotification(recipientId: string, data: any) {
+    this.server.to(`user_${recipientId}`).emit('newNotification', {
+      ...data,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  /**
+   * Emit online status visibility changed - when user toggles showOnlineStatus off,
+   * broadcast them as offline to all subscribers and track in hidden set
+   */
+  emitOnlineStatusVisibilityChanged(userId: string, showOnlineStatus: boolean) {
+    if (!showOnlineStatus) {
+      // Add to hidden set so all future queries return offline
+      this.hiddenStatusUsers.add(userId);
+      // Appear offline to everyone
+      this.broadcastOnlineStatus(userId, false);
+    } else {
+      // Remove from hidden set
+      this.hiddenStatusUsers.delete(userId);
+      // If they're actually online, broadcast as online
+      const isOnline = this.onlineUsers.has(userId) && 
+                       this.userSockets.has(userId) && 
+                       (this.userSockets.get(userId)?.size || 0) > 0;
+      if (isOnline) {
+        this.broadcastOnlineStatus(userId, true);
+      }
+    }
   }
 }

@@ -42,6 +42,8 @@ export class PushController {
       case 'reply':
         return settings.pushComments ?? true;
       case 'follow':
+      case 'follow_request':
+      case 'follow_request_accepted':
         return settings.pushNewFollowers ?? true;
       case 'mention':
         return settings.pushMentions ?? true;
@@ -112,10 +114,33 @@ export class PushController {
         dto.data || {},
       );
 
+      // Clean up invalid FCM tokens (expired, unregistered, etc.)
+      if (result.failedTokens.length > 0) {
+        const invalidCodes = ['messaging/invalid-registration-token', 'messaging/registration-token-not-registered'];
+        const tokensToClean = result.errors
+          .filter(e => invalidCodes.includes(e.code))
+          .map(e => result.failedTokens.find(t => t.startsWith(e.token.replace('...', ''))))
+          .filter(Boolean);
+
+        // Actually clean all failed tokens from sessions to force re-registration
+        for (const failedToken of result.failedTokens) {
+          try {
+            await this.sessionRepository.update(
+              { fcmToken: failedToken },
+              { fcmToken: null as any },
+            );
+            console.log(`[PUSH] Cleaned up invalid FCM token: ${failedToken.substring(0, 20)}...`);
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+        }
+      }
+
       return {
-        success: true,
+        success: result.successCount > 0,
         sentTo: result.successCount,
         failed: result.failureCount,
+        errors: result.errors,
       };
     } catch (error) {
       console.error('[ERROR] Error sending push notification:', error);
@@ -154,6 +179,8 @@ export class PushController {
           inAppEnabled = settings.inAppComments ?? true;
           break;
         case 'follow':
+        case 'follow_request':
+        case 'follow_request_accepted':
           inAppEnabled = settings.inAppNewFollowers ?? true;
           break;
         case 'mention':

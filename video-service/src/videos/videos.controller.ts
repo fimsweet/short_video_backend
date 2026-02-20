@@ -104,8 +104,35 @@ export class VideosController {
 
   // ⚠️ IMPORTANT: :id route must be LAST to avoid catching other routes
   @Get(':id')
-  async getVideo(@Param('id') id: string) {
-    return this.videosService.getVideoById(id);
+  async getVideo(@Param('id') id: string, @Query('requesterId') requesterId?: string) {
+    const video = await this.videosService.getVideoById(id);
+    if (!video) return null;
+
+    const isOwner = requesterId && video.userId === requesterId;
+
+    // Block access to hidden videos for non-owners
+    if (video.isHidden && !isOwner) {
+      return null;
+    }
+
+    // Block access based on visibility for non-owners
+    if (!isOwner) {
+      if (video.visibility === 'private') {
+        return null;
+      }
+      if (video.visibility === 'friends') {
+        // Check if requester is a mutual friend
+        try {
+          const isFriend = await this.videosService.checkMutualFriend(requesterId!, video.userId);
+          if (!isFriend) return null;
+        } catch (e) {
+          // If we can't check friendship, deny access for safety
+          return null;
+        }
+      }
+    }
+
+    return video;
   }
 
   @Post(':id/view')
@@ -128,6 +155,8 @@ export class VideosController {
     return {
       success: true,
       isHidden: video.isHidden,
+      visibility: video.visibility,
+      allowComments: video.allowComments,
       message: video.isHidden ? 'Video đã được ẩn' : 'Video đã hiện thị',
     };
   }
@@ -159,6 +188,7 @@ export class VideosController {
     const video = await this.videosService.updateVideoPrivacy(id, privacySettings);
     return {
       success: true,
+      isHidden: video.isHidden,
       visibility: video.visibility,
       allowComments: video.allowComments,
       allowDuet: video.allowDuet,

@@ -1,8 +1,9 @@
-﻿import { Injectable } from '@nestjs/common';
+﻿import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Notification, NotificationType } from '../entities/notification.entity';
 import { PushNotificationService } from './push-notification.service';
+import { MessagesGateway } from '../messages/messages.gateway';
 
 @Injectable()
 export class NotificationsService {
@@ -10,6 +11,8 @@ export class NotificationsService {
     @InjectRepository(Notification)
     private notificationRepository: Repository<Notification>,
     private pushNotificationService: PushNotificationService,
+    @Inject(forwardRef(() => MessagesGateway))
+    private messagesGateway: MessagesGateway,
   ) {}
 
   async createNotification(
@@ -56,6 +59,19 @@ export class NotificationsService {
     });
 
     const saved = await this.notificationRepository.save(notification);
+
+    // Emit via WebSocket for instant UI badge update (parallel to FCM push)
+    try {
+      this.messagesGateway.emitNewNotification(recipientId, {
+        id: saved.id,
+        type,
+        senderId,
+        videoId,
+        message,
+      });
+    } catch (error) {
+      console.error('[WARN] Failed to emit socket notification:', error);
+    }
 
     // Send push notification based on type
     this.sendPushForNotification(
@@ -119,6 +135,18 @@ export class NotificationsService {
           break;
         case NotificationType.FOLLOW:
           await this.pushNotificationService.sendFollowNotification(
+            recipientId,
+            senderName,
+          );
+          break;
+        case NotificationType.FOLLOW_REQUEST:
+          await this.pushNotificationService.sendFollowRequestNotification(
+            recipientId,
+            senderName,
+          );
+          break;
+        case NotificationType.FOLLOW_REQUEST_ACCEPTED:
+          await this.pushNotificationService.sendFollowRequestAcceptedNotification(
             recipientId,
             senderName,
           );

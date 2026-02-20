@@ -137,12 +137,13 @@ export class LikesService {
       return [];
     }
 
-    // Get video details for each like, excluding user's own videos
+    // Get video details for each like, excluding user's own videos and hidden videos
     const videoIds = likes.map(like => like.videoId);
     const videos = await this.videoRepository
       .createQueryBuilder('video')
       .where('video.id IN (:...videoIds)', { videoIds })
       .andWhere('video.userId != :userId', { userId })
+      .andWhere('video.isHidden = :isHidden', { isHidden: false })
       .orderBy('video.createdAt', 'DESC')
       .getMany();
 
@@ -173,6 +174,20 @@ export class LikesService {
   async deleteAllLikesForVideo(videoId: string): Promise<void> {
     await this.likeRepository.delete({ videoId });
     console.log(`Deleted all likes for video ${videoId}`);
+  }
+
+  /**
+   * Get total likes received by a user across all their videos
+   * This counts all likes on videos owned by the given user
+   */
+  async getTotalReceivedLikes(userId: string): Promise<number> {
+    const result = await this.likeRepository
+      .createQueryBuilder('l')
+      .innerJoin(Video, 'v', 'l.videoId = v.id')
+      .where('v.userId = :userId', { userId })
+      .getCount();
+
+    return result;
   }
 
   /**

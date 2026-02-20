@@ -278,4 +278,22 @@ export class MessagesController {
     const result = await this.messagesService.translateMessage(body.text, body.targetLanguage);
     return result;
   }
+
+  @Post('privacy-settings-changed')
+  async notifyPrivacySettingsChanged(
+    @Body() body: { userId: string; whoCanSendMessages?: string; showOnlineStatus?: boolean },
+  ) {
+    if (body.whoCanSendMessages !== undefined) {
+      this.messagesGateway.emitPrivacySettingsChanged(body.userId, {
+        whoCanSendMessages: body.whoCanSendMessages,
+      });
+    }
+    if (body.showOnlineStatus !== undefined) {
+      this.messagesGateway.emitOnlineStatusVisibilityChanged(body.userId, body.showOnlineStatus);
+      this.messagesGateway.emitPrivacySettingsChanged(body.userId, {
+        showOnlineStatus: body.showOnlineStatus,
+      });
+    }
+    return { success: true };
+  }
 }

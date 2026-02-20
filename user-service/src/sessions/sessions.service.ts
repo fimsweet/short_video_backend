@@ -344,16 +344,52 @@ export class SessionsService {
 
   /**
    * Update FCM token for a session
+   * First tries exact token hash match, then falls back to most recent active session
    */
   async updateFcmToken(userId: number, token: string, fcmToken: string): Promise<{ success: boolean }> {
     const tokenHash = this.hashToken(token);
     
+    // Try exact match first (session created with same JWT)
     const result = await this.sessionRepository.update(
       { userId, token: tokenHash, isActive: true },
       { fcmToken }
     );
 
-    return { success: result.affected ? result.affected > 0 : false };
+    if (result.affected && result.affected > 0) {
+      return { success: true };
+    }
+
+    // Fallback: update the most recent active session for this user
+    // This handles cases where the session was created with a different token
+    // (e.g., 2FA verify returns a new token, phone login, OAuth, etc.)
+    const latestSession = await this.sessionRepository.findOne({
+      where: { userId, isActive: true },
+      order: { lastActivityAt: 'DESC' },
+    });
+
+    if (latestSession) {
+      // Update both the FCM token and the token hash to match current JWT
+      latestSession.fcmToken = fcmToken;
+      latestSession.token = tokenHash;
+      latestSession.lastActivityAt = new Date();
+      await this.sessionRepository.save(latestSession);
+      console.log(`[SESSION] FCM token updated via fallback for userId=${userId} (session ${latestSession.id})`);
+      return { success: true };
+    }
+
+    // No active session at all — create one
+    const newSession = this.sessionRepository.create({
+      userId,
+      token: tokenHash,
+      platform: 'unknown',
+      fcmToken,
+      isActive: true,
+      lastActivityAt: new Date(),
+    });
+    await this.sessionRepository.save(newSession);
+    console.log(`[SESSION] Created new session with FCM token for userId=${userId}`);
+    
+    return { success: true };
   }
 
   /**

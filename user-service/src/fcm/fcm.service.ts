@@ -100,14 +100,14 @@ export class FcmService {
     title: string,
     body: string,
     data?: Record<string, string>,
-  ): Promise<{ successCount: number; failureCount: number; failedTokens: string[] }> {
+  ): Promise<{ successCount: number; failureCount: number; failedTokens: string[]; errors: Array<{ token: string; code: string; message: string }> }> {
     if (!this.ensureInitialized()) {
       this.logger.warn('Firebase not initialized, skipping notifications');
-      return { successCount: 0, failureCount: fcmTokens.length, failedTokens: fcmTokens };
+      return { successCount: 0, failureCount: fcmTokens.length, failedTokens: fcmTokens, errors: [{ token: '', code: 'NOT_INITIALIZED', message: 'Firebase Admin SDK not initialized' }] };
     }
 
     if (fcmTokens.length === 0) {
-      return { successCount: 0, failureCount: 0, failedTokens: [] };
+      return { successCount: 0, failureCount: 0, failedTokens: [], errors: [] };
     }
 
     try {
@@ -138,11 +138,15 @@ export class FcmService {
       const response = await admin.messaging().sendEachForMulticast(message);
       
       const failedTokens: string[] = [];
+      const errors: Array<{ token: string; code: string; message: string }> = [];
       response.responses.forEach((resp, idx) => {
         if (!resp.success) {
           failedTokens.push(fcmTokens[idx]);
+          const errorCode = resp.error?.code || 'UNKNOWN';
+          const errorMessage = resp.error?.message || 'Unknown error';
+          errors.push({ token: fcmTokens[idx].substring(0, 20) + '...', code: errorCode, message: errorMessage });
           this.logger.error(
-            `FCM send failed for token[${idx}]: code=${resp.error?.code}, message=${resp.error?.message}`,
+            `FCM send failed for token[${idx}]: code=${errorCode}, message=${errorMessage}`,
           );
         }
       });
@@ -153,10 +157,11 @@ export class FcmService {
         successCount: response.successCount,
         failureCount: response.failureCount,
         failedTokens,
+        errors,
       };
     } catch (error: any) {
       this.logger.error(`Failed to send notifications: ${error.message}`);
-      return { successCount: 0, failureCount: fcmTokens.length, failedTokens: fcmTokens };
+      return { successCount: 0, failureCount: fcmTokens.length, failedTokens: fcmTokens, errors: [{ token: '', code: 'EXCEPTION', message: error.message }] };
     }
   }
 

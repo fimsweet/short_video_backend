@@ -111,6 +111,42 @@ export class PushNotificationService {
   }
 
   /**
+   * Send notification for follow request
+   */
+  async sendFollowRequestNotification(
+    recipientId: string,
+    requesterName: string,
+  ): Promise<boolean> {
+    return this.sendToUser({
+      userId: recipientId,
+      title: '📩 Yêu cầu theo dõi',
+      body: `${requesterName} đã gửi yêu cầu theo dõi bạn`,
+      data: {
+        type: 'follow_request',
+        requesterName,
+      },
+    });
+  }
+
+  /**
+   * Send notification for follow request accepted
+   */
+  async sendFollowRequestAcceptedNotification(
+    recipientId: string,
+    accepterName: string,
+  ): Promise<boolean> {
+    return this.sendToUser({
+      userId: recipientId,
+      title: '✅ Yêu cầu được chấp nhận',
+      body: `${accepterName} đã chấp nhận yêu cầu theo dõi của bạn`,
+      data: {
+        type: 'follow_request_accepted',
+        accepterName,
+      },
+    });
+  }
+
+  /**
    * Send notification for new like
    */
   async sendLikeNotification(

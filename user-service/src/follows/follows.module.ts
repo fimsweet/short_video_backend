@@ -5,11 +5,12 @@ import { FollowsService } from './follows.service';
 import { FollowsController } from './follows.controller';
 import { Follow } from '../entities/follow.entity';
 import { User } from '../entities/user.entity';
+import { UserSettings } from '../entities/user-settings.entity';
 import { ActivityHistoryModule } from '../activity-history/activity-history.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Follow, User]),
+    TypeOrmModule.forFeature([Follow, User, UserSettings]),
     HttpModule,
     ActivityHistoryModule,
   ],

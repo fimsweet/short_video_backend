@@ -24,13 +24,23 @@ export class CommentsService {
   async createComment(videoId: string, userId: string, content: string, parentId?: string, imageUrl?: string | null): Promise<Comment> {
     // Get video to find owner for privacy check and check allowComments
     const videos = await this.commentRepository.manager.query(
-      'SELECT id, userId, allowComments FROM videos WHERE id = ?',
+      'SELECT id, userId, allowComments, isHidden, visibility FROM videos WHERE id = ?',
       [videoId]
     );
     
     if (videos && videos.length > 0) {
       const video = videos[0];
-      const videoOwnerId = video.userId;
+      const videoOwnerId = String(video.userId);
+
+      // Block comments on hidden videos for non-owners
+      if (video.isHidden && videoOwnerId !== String(userId)) {
+        throw new ForbiddenException('Cannot comment on a hidden video');
+      }
+
+      // Block comments on private videos for non-owners
+      if (video.visibility === 'private' && videoOwnerId !== String(userId)) {
+        throw new ForbiddenException('Cannot comment on a private video');
+      }
       
       // Check if comments are allowed on this video
       if (video.allowComments === false || video.allowComments === 0) {
@@ -38,7 +48,7 @@ export class CommentsService {
       }
       
       // Check if user is allowed to comment
-      const canComment = await this.privacyService.canComment(userId, videoOwnerId);
+      const canComment = await this.privacyService.canComment(String(userId), videoOwnerId);
       if (!canComment.allowed) {
         throw new ForbiddenException(canComment.reason || 'Bạn không được phép bình luận video này');
       }
@@ -84,7 +94,7 @@ export class CommentsService {
     try {
       if (videos && videos.length > 0) {
         const video = videos[0];
-        if (video.userId !== userId) {
+        if (String(video.userId) !== String(userId)) {
           await this.notificationsService.createNotification(
             video.userId,
             userId,

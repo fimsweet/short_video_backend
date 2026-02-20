@@ -677,7 +677,7 @@ export class AuthService {
 
       // Generate and send OTP to email
       const otp = await this.otpService.createOtp(user.email, '2fa');
-      const sent = await this.emailService.sendOtpEmail(user.email, otp);
+      const sent = await this.emailService.send2FAOtpEmail(user.email, otp);
 
       if (!sent) {
         throw new BadRequestException('Không thể gửi email xác thực');
@@ -772,7 +772,12 @@ export class AuthService {
       }
 
       // Create and send OTP
-      await this.otpService.createOtp(user.email, '2fa_settings');
+      const otp = await this.otpService.createOtp(user.email, '2fa_settings');
+      const sent = await this.emailService.send2FAOtpEmail(user.email, otp);
+
+      if (!sent) {
+        throw new BadRequestException('Không thể gửi email xác thực');
+      }
 
       // Mask email
       const maskedEmail = user.email.replace(/(.{2})(.*)(?=@)/, (_, a, b) => a + '*'.repeat(b.length));

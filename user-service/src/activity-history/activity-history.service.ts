@@ -120,7 +120,7 @@ export class ActivityHistoryService {
         let types: string[] = [];
         switch (actionType) {
             case 'videos':
-                types = ['video_posted', 'video_deleted', 'video_hidden'];
+                types = ['video_posted', 'video_deleted', 'video_hidden', 'privacy_updated'];
                 break;
             case 'social':
                 types = ['follow', 'unfollow', 'like', 'unlike'];

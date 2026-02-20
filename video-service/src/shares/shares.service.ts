@@ -2,17 +2,31 @@
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Share } from '../entities/share.entity';
+import { Video } from '../entities/video.entity';
 
 @Injectable()
 export class SharesService {
   constructor(
     @InjectRepository(Share)
     private shareRepository: Repository<Share>,
+    @InjectRepository(Video)
+    private videoRepository: Repository<Video>,
   ) {}
 
   async createShare(videoId: string, sharerId: string, recipientId: string): Promise<{ shareCount: number }> {
     console.log(`[SHARE] Creating share: videoId=${videoId}, sharerId=${sharerId}, recipientId=${recipientId}`);
     
+    // Block sharing of hidden or private videos for non-owners
+    const video = await this.videoRepository.findOne({ where: { id: videoId } });
+    if (video?.isHidden && video?.userId !== sharerId) {
+      console.log(`[SHARE] Blocked: cannot share hidden video ${videoId}`);
+      throw new Error('Cannot share a hidden video');
+    }
+    if (video?.visibility === 'private' && video?.userId !== sharerId) {
+      console.log(`[SHARE] Blocked: cannot share private video ${videoId}`);
+      throw new Error('Cannot share a private video');
+    }
+
     // Create new share record
     await this.shareRepository.save({
       videoId,

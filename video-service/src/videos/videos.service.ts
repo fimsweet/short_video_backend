@@ -53,11 +53,23 @@ export class VideosService {
     this.queueName = this.configService.get<string>('RABBITMQ_QUEUE') || 'video_processing_queue';
   }
 
-  // Helper: Invalidate all user video cache variants (with and without requesterId)
+  // Helper: Invalidate all user video cache variants using visibility tiers
+  // Uses 3 deterministic keys: self, friend, public — no pattern matching needed
   private async invalidateUserVideosCache(userId: string): Promise<void> {
     await Promise.all([
-      this.cacheManager.del(`user_videos:${userId}`),
       this.cacheManager.del(`user_videos:${userId}:self`),
+      this.cacheManager.del(`user_videos:${userId}:friend`),
+      this.cacheManager.del(`user_videos:${userId}:public`),
+      this.cacheManager.del(`user_videos:${userId}:restricted`),
+    ]);
+    console.log(`[CACHE] Invalidated all user_videos cache tiers for user ${userId}`);
+  }
+
+  // Helper: Invalidate feed caches so hidden/unhidden videos reflect immediately
+  private async invalidateFeedCaches(): Promise<void> {
+    await Promise.all([
+      this.cacheManager.del('all_videos:50'),
+      this.cacheManager.del('all_videos:100'),
     ]);
   }
 
@@ -170,8 +182,7 @@ export class VideosService {
     // Invalidate all relevant caches
     await this.cacheManager.del(`video:${videoId}`);
     await this.invalidateUserVideosCache(userId);
-    await this.cacheManager.del('all_videos:50');
-    await this.cacheManager.del('all_videos:100');
+    await this.invalidateFeedCaches();
 
     console.log(`[OK] Cache invalidated for video ${videoId}`);
   }
@@ -376,31 +387,53 @@ export class VideosService {
 
   async getVideosByUserId(userId: string, requesterId?: string): Promise<{ videos: any[], privacyRestricted?: boolean, reason?: string }> {
     try {
-      // [OK] Check cache first
-      const cacheKey = `user_videos:${userId}:${requesterId || 'self'}`;
-      const cachedVideos = await this.cacheManager.get(cacheKey);
-
-      if (cachedVideos) {
-        console.log(`[OK] Cache HIT for user ${userId} videos`);
-        return cachedVideos as any;
-      }
-
-      console.log(`[WARN] Cache MISS for user ${userId} videos - fetching from DB`);
-      console.log(`📺 Fetching videos for user ${userId} (requesterId: ${requesterId || 'self'})...`);
-
-      // If requester is not the owner, check user-level privacy first
+      // Determine visibility tier for caching (self / friend / public / restricted)
       const isOwner = !requesterId || requesterId === userId;
+      let cacheTier = isOwner ? 'self' : 'public'; // default tier
 
       // [PRIVACY] Check user-level privacy settings before fetching videos
       if (!isOwner) {
         const privacyCheck = await this.privacyService.canViewVideo(requesterId, userId);
         if (!privacyCheck.allowed) {
           console.log(`[PRIVACY] User ${requesterId} cannot view videos of user ${userId}: ${privacyCheck.reason}`);
+          const restrictedKey = `user_videos:${userId}:restricted`;
+          const cachedRestricted = await this.cacheManager.get(restrictedKey);
+          if (cachedRestricted) return cachedRestricted as any;
           const result = { videos: [], privacyRestricted: true, reason: privacyCheck.reason };
-          await this.cacheManager.set(cacheKey, result, 60000); // Cache for 1 min
+          await this.cacheManager.set(restrictedKey, result, 60000);
           return result;
         }
       }
+
+      // Check friendship for non-owners to determine cache tier
+      let isFriend = false;
+      if (!isOwner) {
+        try {
+          isFriend = await this.checkMutualFriend(requesterId!, userId);
+        } catch (e) {
+          console.error('[ERROR] Error checking mutual follow:', e);
+        }
+        cacheTier = isFriend ? 'friend' : 'public';
+      }
+
+      // [OK] Check cache using visibility tier key
+      const cacheKey = `user_videos:${userId}:${cacheTier}`;
+      const cachedVideos = await this.cacheManager.get(cacheKey);
+      if (cachedVideos) {
+        console.log(`[OK] Cache HIT for user ${userId} videos (tier: ${cacheTier})`);
+        // Always overlay fresh ownerWhoCanComment (user-level privacy can change anytime)
+        const cached = cachedVideos as any;
+        if (cached.videos && Array.isArray(cached.videos)) {
+          const freshSettings = await this.privacyService.getPrivacySettingsBatch([userId]);
+          cached.videos = cached.videos.map((v: any) => ({
+            ...v,
+            ownerWhoCanComment: freshSettings.get(userId)?.whoCanComment || 'everyone',
+          }));
+        }
+        return cached;
+      }
+
+      console.log(`[WARN] Cache MISS for user ${userId} videos (tier: ${cacheTier}) - fetching from DB`);
 
       const videos = await this.videoRepository.find({
         where: { userId },
@@ -409,29 +442,21 @@ export class VideosService {
 
       console.log(`[OK] Found ${videos.length} videos for user ${userId}`);
 
-      // Filter by visibility based on relationship
+      // Filter by visibility based on relationship tier
       let filteredVideos = videos;
       if (!isOwner) {
-        let isFriend = false;
-        try {
-          const userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3000';
-          const mutualResponse = await firstValueFrom(
-            this.httpService.get(`${userServiceUrl}/follows/check-mutual/${requesterId}/${userId}`)
-          );
-          isFriend = mutualResponse.data?.isMutual === true;
-        } catch (e) {
-          console.error('[ERROR] Error checking mutual follow:', e);
-        }
-
         if (isFriend) {
           filteredVideos = videos.filter(v => 
-            v.visibility === VideoVisibility.PUBLIC || v.visibility === VideoVisibility.FRIENDS
+            !v.isHidden && (v.visibility === VideoVisibility.PUBLIC || v.visibility === VideoVisibility.FRIENDS)
           );
         } else {
-          filteredVideos = videos.filter(v => v.visibility === VideoVisibility.PUBLIC);
+          filteredVideos = videos.filter(v => !v.isHidden && v.visibility === VideoVisibility.PUBLIC);
         }
-        console.log(`[OK] Filtered to ${filteredVideos.length} visible videos for requester ${requesterId}`);
+        console.log(`[OK] Filtered to ${filteredVideos.length} visible videos for tier ${cacheTier}`);
       }
+
+      // Fetch owner privacy settings for whoCanComment
+      const userSettingsMap = await this.privacyService.getPrivacySettingsBatch([userId]);
 
       // Add like and comment counts
       const videosWithCounts = await Promise.all(
@@ -460,6 +485,7 @@ export class VideosService {
             saveCount,
             shareCount,
             viewCount: video.viewCount || 0,
+            ownerWhoCanComment: userSettingsMap.get(video.userId)?.whoCanComment || 'everyone',
           };
         }),
       );
@@ -481,6 +507,21 @@ export class VideosService {
     } catch (error) {
       console.error('[ERROR] Error in getVideosByUserId:', error);
       throw error;
+    }
+  }
+
+  // Check if two users are mutual friends (follow each other)
+  async checkMutualFriend(requesterId: string, videoOwnerId: string): Promise<boolean> {
+    if (!requesterId || !videoOwnerId) return false;
+    try {
+      const userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3000';
+      const mutualResponse = await firstValueFrom(
+        this.httpService.get(`${userServiceUrl}/follows/check-mutual/${requesterId}/${videoOwnerId}`)
+      );
+      return mutualResponse.data?.isMutual === true;
+    } catch (e) {
+      console.error('[ERROR] Error checking mutual friend:', e);
+      return false;
     }
   }
 
@@ -578,7 +619,14 @@ export class VideosService {
 
       if (cachedVideos) {
         console.log(`[OK] Cache HIT for all videos (limit: ${limit})`);
-        return cachedVideos as any[];
+        // Always overlay fresh ownerWhoCanComment (user-level privacy can change anytime)
+        const cached = cachedVideos as any[];
+        const cachedOwnerIds = [...new Set(cached.map(v => v.userId))];
+        const freshSettings = await this.privacyService.getPrivacySettingsBatch(cachedOwnerIds);
+        return cached.map(v => ({
+          ...v,
+          ownerWhoCanComment: freshSettings.get(v.userId)?.whoCanComment || 'everyone',
+        }));
       }
 
       console.log(`[WARN] Cache MISS for all videos - fetching from DB`);
@@ -604,6 +652,10 @@ export class VideosService {
       // Trim to requested limit
       const limitedVideos = filteredVideos.slice(0, limit);
 
+      // Fetch owner privacy settings for whoCanComment
+      const allOwnerIds = [...new Set(limitedVideos.map(v => v.userId))];
+      const allSettingsMap = await this.privacyService.getPrivacySettingsBatch(allOwnerIds);
+
       // Add like and comment counts
       const videosWithCounts = await Promise.all(
         limitedVideos.map(async (video) => {
@@ -618,6 +670,7 @@ export class VideosService {
             commentCount,
             saveCount,
             shareCount,
+            ownerWhoCanComment: allSettingsMap.get(video.userId)?.whoCanComment || 'everyone',
           };
         }),
       );
@@ -701,7 +754,7 @@ export class VideosService {
       });
       console.log(`[PRIVACY] Following feed after privacy filter: ${privacyFiltered.length}/${videos.length}`);
 
-      // Add like and comment counts
+      // Add like and comment counts + ownerWhoCanComment
       const videosWithCounts = await Promise.all(
         privacyFiltered.map(async (video) => {
           const likeCount = await this.likesService.getLikeCount(video.id);
@@ -714,6 +767,7 @@ export class VideosService {
             commentCount,
             saveCount,
             shareCount,
+            ownerWhoCanComment: settingsMap.get(video.userId)?.whoCanComment || 'everyone',
           };
         }),
       );
@@ -789,6 +843,7 @@ export class VideosService {
             commentCount,
             saveCount,
             shareCount,
+            ownerWhoCanComment: settingsMap.get(video.userId)?.whoCanComment || 'everyone',
           };
         }),
       );
@@ -908,11 +963,53 @@ export class VideosService {
     }
 
     video.isHidden = !video.isHidden;
+
+    // [SYNC] TikTok behavior: hiding a video → set private + disable comments
+    // Unhiding a video → restore to public + enable comments
+    if (video.isHidden) {
+      video.visibility = 'private' as any;
+      video.allowComments = false;
+    } else {
+      // Restore to public visibility and re-enable comments when unhiding
+      video.visibility = 'public' as any;
+      video.allowComments = true;
+    }
+
     const result = await this.videoRepository.save(video);
 
     // [OK] Invalidate caches
     await this.cacheManager.del(`video:${videoId}`);
     await this.invalidateUserVideosCache(userId);
+    await this.invalidateFeedCaches();
+
+    // [ES] Remove from or re-add to Elasticsearch index
+    try {
+      if (video.isHidden) {
+        // Video is now hidden → remove from search index
+        await this.searchService.deleteVideo(videoId);
+        console.log(`[ES] Removed hidden video ${videoId} from search index`);
+      } else if (video.status === 'ready') {
+        // Video is now visible again → re-add to search index
+        const likeCount = await this.likesService.getLikeCount(videoId);
+        const commentCount = await this.commentsService.getCommentCount(videoId);
+        await this.searchService.indexVideo({
+          id: video.id,
+          title: video.title || '',
+          description: video.description || '',
+          userId: video.userId,
+          thumbnailUrl: video.thumbnailUrl || '',
+          hlsUrl: video.hlsUrl || '',
+          aspectRatio: video.aspectRatio || '9:16',
+          viewCount: video.viewCount || 0,
+          likeCount,
+          commentCount,
+          createdAt: video.createdAt,
+        });
+        console.log(`[ES] Re-indexed unhidden video ${videoId} to search index`);
+      }
+    } catch (e) {
+      console.error(`[ES] Error updating search index for video ${videoId}:`, e);
+    }
 
     // Log video_hidden activity
     this.activityLoggerService.logActivity({
@@ -920,7 +1017,7 @@ export class VideosService {
       actionType: 'video_hidden',
       targetId: videoId,
       targetType: 'video',
-      metadata: { isHidden: video.isHidden, title: video.title },
+      metadata: { isHidden: video.isHidden, title: video.title, videoThumbnail: video.thumbnailUrl },
     });
 
     return result;
@@ -1069,9 +1166,7 @@ export class VideosService {
       // [OK] Invalidate all related caches
       await this.cacheManager.del(`video:${videoId}`);
       await this.invalidateUserVideosCache(userId);
-      // Clear common feed cache keys
-      await this.cacheManager.del('all_videos:50');
-      await this.cacheManager.del('all_videos:100');
+      await this.invalidateFeedCaches();
 
       console.log(`[OK] Video ${videoId} completely deleted by user ${userId}`);
 
@@ -1109,6 +1204,8 @@ export class VideosService {
       throw new Error('Not authorized to update this video');
     }
 
+    const oldVisibility = video.visibility;
+
     if (settings.visibility !== undefined) {
       video.visibility = settings.visibility as any;
     }
@@ -1119,13 +1216,58 @@ export class VideosService {
       video.allowDuet = settings.allowDuet;
     }
 
+    // [SYNC] If changing visibility away from private, auto-unhide the video
+    if (video.isHidden && settings.visibility && settings.visibility !== 'private') {
+      video.isHidden = false;
+      console.log(`[SYNC] Video ${videoId} auto-unhidden because visibility changed to ${settings.visibility}`);
+    }
+
     await this.videoRepository.save(video);
 
     // Invalidate cache
     await this.cacheManager.del(`video:${videoId}`);
     await this.invalidateUserVideosCache(settings.userId);
+    await this.invalidateFeedCaches();
 
-    console.log(`[PRIVACY] Video ${videoId} privacy updated: visibility=${video.visibility}, comments=${video.allowComments}, duet=${video.allowDuet}`);
+    // [ES] Update Elasticsearch index based on new visibility
+    try {
+      if (video.visibility === 'private' || video.isHidden) {
+        // Private or hidden → remove from search
+        await this.searchService.deleteVideo(videoId);
+        console.log(`[ES] Removed private/hidden video ${videoId} from search index`);
+      } else if (video.status === 'ready' && (oldVisibility === 'private' || video.visibility === 'public')) {
+        // Became visible → re-index
+        const likeCount = await this.likesService.getLikeCount(videoId);
+        const commentCount = await this.commentsService.getCommentCount(videoId);
+        await this.searchService.indexVideo({
+          id: video.id,
+          title: video.title || '',
+          description: video.description || '',
+          userId: video.userId,
+          thumbnailUrl: video.thumbnailUrl || '',
+          hlsUrl: video.hlsUrl || '',
+          aspectRatio: video.aspectRatio || '9:16',
+          viewCount: video.viewCount || 0,
+          likeCount,
+          commentCount,
+          createdAt: video.createdAt,
+        });
+        console.log(`[ES] Re-indexed video ${videoId} after visibility change to ${video.visibility}`);
+      }
+    } catch (e) {
+      console.error(`[ES] Error updating search index for video ${videoId}:`, e);
+    }
+
+    // Log privacy_updated activity
+    this.activityLoggerService.logActivity({
+      userId: parseInt(settings.userId),
+      actionType: 'privacy_updated',
+      targetId: videoId,
+      targetType: 'video',
+      metadata: { visibility: video.visibility, allowComments: video.allowComments, allowDuet: video.allowDuet },
+    });
+
+    console.log(`[PRIVACY] Video ${videoId} privacy updated: visibility=${video.visibility}, comments=${video.allowComments}, duet=${video.allowDuet}, isHidden=${video.isHidden}`);
 
     return video;
   }
@@ -1229,7 +1371,7 @@ export class VideosService {
     // Invalidate cache
     await this.cacheManager.del(`video:${videoId}`);
     await this.invalidateUserVideosCache(userId);
-    await this.cacheManager.del('all_videos:50');
+    await this.invalidateFeedCaches();
 
     console.log(`[THUMB] Video ${videoId} thumbnail updated: ${video.thumbnailUrl}`);
 

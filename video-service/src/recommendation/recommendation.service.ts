@@ -134,17 +134,44 @@ export class RecommendationService {
       
       console.log(`   Excluding ${recentlyWatchedSet.size} recently watched/seen videos, deprioritizing ${olderWatchedSet.size} older watched`);
 
-      // 6. Get all ready, non-hidden, PUBLIC videos EXCLUDING user's own videos
-      const allVideos = await this.videoRepository.find({
-        where: {
-          status: VideoStatus.READY,
-          isHidden: false,
-          visibility: VideoVisibility.PUBLIC, // Only recommend public videos
-          userId: Not(userId.toString()), // Exclude user's own videos from recommendations
-        },
-        order: { createdAt: 'DESC' },
-        take: limit * 4, // Get more videos to score and filter (increased from 3x)
-      });
+      // 6a. Get following + mutual-friend user IDs to exclude from recommendations
+      // Their videos should only appear in the "Following" and "Friends" tabs
+      const excludeUserIds: string[] = [userId.toString()];
+      try {
+        const userServiceUrl = this.configService.get<string>('USER_SERVICE_URL') || 'http://localhost:3000';
+        
+        const [followingRes, mutualRes] = await Promise.all([
+          firstValueFrom(this.httpService.get(`${userServiceUrl}/follows/following/${userId}`)),
+          firstValueFrom(this.httpService.get(`${userServiceUrl}/follows/mutual-friends/${userId}?limit=1000`)),
+        ]);
+        
+        const followingIds: number[] = followingRes.data.followingIds || [];
+        const mutualFriendIds: number[] = (mutualRes.data.data || []).map((f: any) => f.userId);
+        
+        // Merge both sets (mutual friends are a subset of following, but be safe)
+        const allExcluded = new Set<string>();
+        allExcluded.add(userId.toString());
+        for (const id of followingIds) allExcluded.add(id.toString());
+        for (const id of mutualFriendIds) allExcluded.add(id.toString());
+        
+        excludeUserIds.length = 0;
+        excludeUserIds.push(...allExcluded);
+        
+        console.log(`   Excluding ${followingIds.length} following + ${mutualFriendIds.length} mutual friends (${allExcluded.size} unique users) from recommendations`);
+      } catch (err) {
+        console.warn('   Failed to fetch following/friends for exclusion, falling back to self-only exclusion:', err.message);
+      }
+
+      // 6b. Get all ready, non-hidden, PUBLIC videos EXCLUDING own + following + friends
+      const queryBuilder = this.videoRepository.createQueryBuilder('video')
+        .where('video.status = :status', { status: VideoStatus.READY })
+        .andWhere('video.isHidden = :isHidden', { isHidden: false })
+        .andWhere('video.visibility = :visibility', { visibility: VideoVisibility.PUBLIC })
+        .andWhere('video.userId NOT IN (:...excludeUserIds)', { excludeUserIds })
+        .orderBy('video.createdAt', 'DESC')
+        .take(limit * 4);
+      
+      const allVideos = await queryBuilder.getMany();
 
       if (allVideos.length === 0) {
         return [];

@@ -72,6 +72,9 @@ export class UserSettings {
   @Column({ default: 'public', length: 50 })
   accountPrivacy: string; // 'public', 'private', 'friends'
 
+  @Column({ default: false })
+  requireFollowApproval: boolean; // When true, follow requests need approval
+
   @Column({ default: true })
   showOnlineStatus: boolean;
 
@@ -87,6 +90,16 @@ export class UserSettings {
 
   @Column({ default: true })
   filterComments: boolean; // Enable comment filtering
+
+  // TikTok-style privacy: who can see your lists
+  @Column({ default: 'everyone', length: 50 })
+  whoCanViewFollowingList: string; // 'everyone', 'friends', 'onlyMe'
+
+  @Column({ default: 'everyone', length: 50 })
+  whoCanViewFollowersList: string; // 'everyone', 'friends', 'onlyMe'
+
+  @Column({ default: 'everyone', length: 50 })
+  whoCanViewLikedVideos: string; // 'everyone', 'friends', 'onlyMe'
 
   // Video settings
   @Column({ default: true })

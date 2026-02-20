@@ -331,10 +331,16 @@ export class UsersController {
     return { success: true };
   }
 
-  // Get user's online status
+  // Get user's online status (privacy-aware)
   @Get(':userId/online-status')
-  async getOnlineStatus(@Param('userId') userId: string) {
-    const status = await this.usersService.getOnlineStatus(parseInt(userId, 10));
+  async getOnlineStatus(
+    @Param('userId') userId: string,
+    @Query('requesterId') requesterId?: string,
+  ) {
+    const status = await this.usersService.getOnlineStatus(
+      parseInt(userId, 10),
+      requesterId ? parseInt(requesterId, 10) : undefined,
+    );
     return { success: true, ...status };
   }
 

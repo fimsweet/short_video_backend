@@ -27,40 +27,110 @@ export class AuthController {
     private readonly sessionsService: SessionsService,
   ) { }
 
+  /**
+   * Helper: create/update a session when login returns access_token + user.
+   * Silently catches errors so login still succeeds even if session creation fails.
+   */
+  private async ensureSession(
+    result: any,
+    ipAddress?: string,
+    platform?: string,
+    deviceInfo?: { deviceName?: string; deviceModel?: string; osVersion?: string; appVersion?: string },
+  ) {
+    try {
+      if (result?.access_token && result?.user?.id) {
+        await this.sessionsService.createSession({
+          userId: result.user.id,
+          token: result.access_token,
+          platform: (platform as DevicePlatform) || 'unknown',
+          deviceName: deviceInfo?.deviceName,
+          deviceModel: deviceInfo?.deviceModel,
+          osVersion: deviceInfo?.osVersion,
+          appVersion: deviceInfo?.appVersion,
+          ipAddress: ipAddress,
+        });
+      }
+    } catch (e) {
+      console.error('[AUTH] Failed to create session:', e);
+    }
+  }
+
   // Legacy register endpoint
   @Post('register')
-  async register(@Body(ValidationPipe) createUserDto: CreateUserDto) {
-    return this.authService.register(createUserDto);
+  async register(
+    @Body(ValidationPipe) createUserDto: CreateUserDto,
+    @Ip() ipAddress: string,
+    @Headers('x-forwarded-for') forwardedFor: string,
+  ) {
+    const result = await this.authService.register(createUserDto);
+    const clientIp = forwardedFor?.split(',')[0]?.trim() || ipAddress;
+    await this.ensureSession(result, clientIp);
+    return result;
   }
 
   // New TikTok-style email registration
   @Post('register/email')
-  async emailRegister(@Body(ValidationPipe) dto: EmailRegisterDto) {
-    return this.authService.emailRegister(dto);
+  async emailRegister(
+    @Body(ValidationPipe) dto: EmailRegisterDto,
+    @Ip() ipAddress: string,
+    @Headers('x-forwarded-for') forwardedFor: string,
+  ) {
+    const result = await this.authService.emailRegister(dto);
+    const clientIp = forwardedFor?.split(',')[0]?.trim() || ipAddress;
+    await this.ensureSession(result, clientIp);
+    return result;
   }
 
   // Phone registration with Firebase token
   @Post('register/phone')
-  async phoneRegister(@Body(ValidationPipe) dto: PhoneRegisterDto) {
-    return this.authService.phoneRegister(dto);
+  async phoneRegister(
+    @Body(ValidationPipe) dto: PhoneRegisterDto,
+    @Ip() ipAddress: string,
+    @Headers('x-forwarded-for') forwardedFor: string,
+  ) {
+    const result = await this.authService.phoneRegister(dto);
+    const clientIp = forwardedFor?.split(',')[0]?.trim() || ipAddress;
+    await this.ensureSession(result, clientIp);
+    return result;
   }
 
   // Phone login with Firebase token
   @Post('login/phone')
-  async phoneLogin(@Body(ValidationPipe) dto: PhoneLoginDto) {
-    return this.authService.phoneLogin(dto);
+  async phoneLogin(
+    @Body(ValidationPipe) dto: PhoneLoginDto,
+    @Ip() ipAddress: string,
+    @Headers('x-forwarded-for') forwardedFor: string,
+  ) {
+    const result = await this.authService.phoneLogin(dto);
+    const clientIp = forwardedFor?.split(',')[0]?.trim() || ipAddress;
+    await this.ensureSession(result, clientIp);
+    return result;
   }
 
   // Complete OAuth registration (after getting user info from Google/Facebook/Apple)
   @Post('register/oauth')
-  async oauthRegister(@Body(ValidationPipe) dto: OAuthRegisterDto) {
-    return this.authService.completeOAuthRegister(dto);
+  async oauthRegister(
+    @Body(ValidationPipe) dto: OAuthRegisterDto,
+    @Ip() ipAddress: string,
+    @Headers('x-forwarded-for') forwardedFor: string,
+  ) {
+    const result = await this.authService.completeOAuthRegister(dto);
+    const clientIp = forwardedFor?.split(',')[0]?.trim() || ipAddress;
+    await this.ensureSession(result, clientIp);
+    return result;
   }
 
   // Google OAuth - verify token and login/get user info
   @Post('oauth/google')
-  async googleAuth(@Body(ValidationPipe) dto: OAuthLoginDto) {
-    return this.authService.googleAuth(dto.idToken);
+  async googleAuth(
+    @Body(ValidationPipe) dto: OAuthLoginDto,
+    @Ip() ipAddress: string,
+    @Headers('x-forwarded-for') forwardedFor: string,
+  ) {
+    const result = await this.authService.googleAuth(dto.idToken);
+    const clientIp = forwardedFor?.split(',')[0]?.trim() || ipAddress;
+    await this.ensureSession(result, clientIp);
+    return result;
   }
 
   // Check username availability
@@ -185,8 +255,15 @@ export class AuthController {
 
   // Verify 2FA OTP
   @Post('2fa/verify')
-  async verify2FA(@Body() dto: { userId: number; otp: string; method: string }) {
-    return this.authService.verify2FA(dto.userId, dto.otp, dto.method);
+  async verify2FA(
+    @Body() dto: { userId: number; otp: string; method: string },
+    @Ip() ipAddress: string,
+    @Headers('x-forwarded-for') forwardedFor: string,
+  ) {
+    const result = await this.authService.verify2FA(dto.userId, dto.otp, dto.method);
+    const clientIp = forwardedFor?.split(',')[0]?.trim() || ipAddress;
+    await this.ensureSession(result, clientIp);
+    return result;
   }
 
   // Send OTP for 2FA settings change (enable/disable)

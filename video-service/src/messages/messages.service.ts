@@ -87,13 +87,19 @@ export class MessagesService {
         displayName = nickname;
       }
     }
-    this.pushNotificationService.sendMessageNotification(
-      recipientId,
-      displayName,
-      content,
-      conversationId,
-      senderId,
-    );
+    // Check if recipient has muted this conversation before sending notification
+    const isRecipientP1 = conversation.participant1Id === recipientId;
+    const isMuted = isRecipientP1 ? conversation.isMutedBy1 : conversation.isMutedBy2;
+    
+    if (!isMuted) {
+      this.pushNotificationService.sendMessageNotification(
+        recipientId,
+        displayName,
+        content,
+        conversationId,
+        senderId,
+      );
+    }
 
     return savedMessage;
   }

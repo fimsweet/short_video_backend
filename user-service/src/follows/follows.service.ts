@@ -6,6 +6,7 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { Follow } from '../entities/follow.entity';
 import { User } from '../entities/user.entity';
+import { UserSettings } from '../entities/user-settings.entity';
 import { ActivityHistoryService } from '../activity-history/activity-history.service';
 
 @Injectable()
@@ -15,12 +16,14 @@ export class FollowsService {
     private followRepository: Repository<Follow>,
     @InjectRepository(User)
     private userRepository: Repository<User>,
+    @InjectRepository(UserSettings)
+    private userSettingsRepository: Repository<UserSettings>,
     private configService: ConfigService,
     private httpService: HttpService,
     private activityHistoryService: ActivityHistoryService,
   ) { }
 
-  async toggleFollow(followerId: number, followingId: number): Promise<{ following: boolean }> {
+  async toggleFollow(followerId: number, followingId: number): Promise<{ following: boolean; requested?: boolean; status?: string }> {
     if (followerId === followingId) {
       throw new Error('Cannot follow yourself');
     }
@@ -36,13 +39,15 @@ export class FollowsService {
     });
 
     if (existingFollow) {
+      // If pending → cancel request; if accepted → unfollow
+      const wasPending = existingFollow.status === 'pending';
       await this.followRepository.remove(existingFollow);
 
-      // Log unfollow activity with user details
+      // Log activity
       try {
         await this.activityHistoryService.logActivity({
           userId: followerId,
-          actionType: 'unfollow',
+          actionType: wasPending ? 'cancel_follow_request' : 'unfollow',
           targetId: followingId.toString(),
           targetType: 'user',
           metadata: targetUser ? {
@@ -55,16 +60,24 @@ export class FollowsService {
         console.error('Error logging unfollow activity:', e);
       }
 
-      return { following: false };
+      return { following: false, requested: false, status: 'none' };
     } else {
-      const newFollow = this.followRepository.create({ followerId, followingId });
+      // Check target's requireFollowApproval setting to decide if instant follow or pending request
+      const targetSettings = await this.userSettingsRepository.findOne({ where: { userId: followingId } });
+      const isPrivateAccount = targetSettings?.requireFollowApproval === true;
+
+      const newFollow = this.followRepository.create({ 
+        followerId, 
+        followingId,
+        status: isPrivateAccount ? 'pending' : 'accepted',
+      });
       await this.followRepository.save(newFollow);
 
-      // Log follow activity with user details
+      // Log activity
       try {
         await this.activityHistoryService.logActivity({
           userId: followerId,
-          actionType: 'follow',
+          actionType: isPrivateAccount ? 'follow_request' : 'follow',
           targetId: followingId.toString(),
           targetType: 'user',
           metadata: targetUser ? {
@@ -79,48 +92,68 @@ export class FollowsService {
 
       // Send notification to video-service
       try {
+        const senderUser = await this.userRepository.findOne({ 
+          where: { id: followerId },
+          select: ['id', 'username']
+        });
         const videoServiceUrl = this.configService.get<string>('VIDEO_SERVICE_URL') || 'http://localhost:3001';
         await firstValueFrom(
           this.httpService.post(`${videoServiceUrl}/notifications/create`, {
             recipientId: followingId.toString(),
             senderId: followerId.toString(),
-            type: 'follow',
+            type: isPrivateAccount ? 'follow_request' : 'follow',
+            senderName: senderUser?.username || 'Người dùng',
           })
         );
       } catch (e) {
         console.error('Error sending follow notification:', e);
       }
 
-      return { following: true };
+      if (isPrivateAccount) {
+        return { following: false, requested: true, status: 'pending' };
+      }
+      return { following: true, requested: false, status: 'accepted' };
     }
   }
 
   async isFollowing(followerId: number, followingId: number): Promise<boolean> {
     const follow = await this.followRepository.findOne({
-      where: { followerId, followingId },
+      where: { followerId, followingId, status: 'accepted' },
     });
     return !!follow;
   }
 
+  /**
+   * Get follow status between two users
+   * Returns: 'none', 'pending', 'following'
+   */
+  async getFollowStatus(followerId: number, followingId: number): Promise<string> {
+    const follow = await this.followRepository.findOne({
+      where: { followerId, followingId },
+    });
+    if (!follow) return 'none';
+    return follow.status === 'accepted' ? 'following' : 'pending';
+  }
+
   async isMutualFollow(userId1: number, userId2: number): Promise<boolean> {
     const [follow1, follow2] = await Promise.all([
-      this.followRepository.findOne({ where: { followerId: userId1, followingId: userId2 } }),
-      this.followRepository.findOne({ where: { followerId: userId2, followingId: userId1 } }),
+      this.followRepository.findOne({ where: { followerId: userId1, followingId: userId2, status: 'accepted' } }),
+      this.followRepository.findOne({ where: { followerId: userId2, followingId: userId1, status: 'accepted' } }),
     ]);
     return !!follow1 && !!follow2;
   }
 
   async getFollowerCount(userId: number): Promise<number> {
-    return this.followRepository.count({ where: { followingId: userId } });
+    return this.followRepository.count({ where: { followingId: userId, status: 'accepted' } });
   }
 
   async getFollowingCount(userId: number): Promise<number> {
-    return this.followRepository.count({ where: { followerId: userId } });
+    return this.followRepository.count({ where: { followerId: userId, status: 'accepted' } });
   }
 
   async getFollowers(userId: number): Promise<number[]> {
     const follows = await this.followRepository.find({
-      where: { followingId: userId },
+      where: { followingId: userId, status: 'accepted' },
       select: ['followerId'],
     });
     return follows.map(f => f.followerId);
@@ -131,12 +164,12 @@ export class FollowsService {
     limit: number = 20, 
     offset: number = 0
   ): Promise<{ data: { userId: number; isMutual: boolean }[]; hasMore: boolean; total: number }> {
-    // Get total count
-    const total = await this.followRepository.count({ where: { followingId: userId } });
+    // Get total count (only accepted follows)
+    const total = await this.followRepository.count({ where: { followingId: userId, status: 'accepted' } });
     
-    // Get paginated followers
+    // Get paginated followers (only accepted)
     const followers = await this.followRepository.find({
-      where: { followingId: userId },
+      where: { followingId: userId, status: 'accepted' },
       select: ['followerId'],
       skip: offset,
       take: limit,
@@ -158,7 +191,7 @@ export class FollowsService {
 
   async getFollowing(userId: number): Promise<number[]> {
     const follows = await this.followRepository.find({
-      where: { followerId: userId },
+      where: { followerId: userId, status: 'accepted' },
       select: ['followingId'],
     });
     return follows.map(f => f.followingId);
@@ -169,12 +202,12 @@ export class FollowsService {
     limit: number = 20, 
     offset: number = 0
   ): Promise<{ data: { userId: number; isMutual: boolean }[]; hasMore: boolean; total: number }> {
-    // Get total count
-    const total = await this.followRepository.count({ where: { followerId: userId } });
+    // Get total count (only accepted follows)
+    const total = await this.followRepository.count({ where: { followerId: userId, status: 'accepted' } });
     
-    // Get paginated following
+    // Get paginated following (only accepted)
     const following = await this.followRepository.find({
-      where: { followerId: userId },
+      where: { followerId: userId, status: 'accepted' },
       select: ['followingId'],
       skip: offset,
       take: limit,
@@ -223,6 +256,7 @@ export class FollowsService {
       .addSelect('COUNT(DISTINCT f.followerId)', 'mutualCount')
       .where('f.followerId IN (:...followingIds)', { followingIds: followingIds.length > 0 ? followingIds : [0] })
       .andWhere('f.followingId NOT IN (:...excludeIds)', { excludeIds })
+      .andWhere('f.status = :status', { status: 'accepted' })
       .groupBy('f.followingId')
       .orderBy('mutualCount', 'DESC')
       .limit(limit)
@@ -260,6 +294,7 @@ export class FollowsService {
       .select('f.followingId', 'userId')
       .addSelect('COUNT(*)', 'followerCount')
       .where('f.followingId NOT IN (:...excludeIds)', { excludeIds })
+      .andWhere('f.status = :status', { status: 'accepted' })
       .groupBy('f.followingId')
       .orderBy('followerCount', 'DESC')
       .limit(limit)
@@ -437,8 +472,9 @@ export class FollowsService {
     offset: number = 0
   ): Promise<{ data: { userId: number; username: string; fullName: string | null; avatar: string | null }[]; hasMore: boolean; total: number }> {
     // Get users that current user follows
+    // Get users that current user follows (only accepted)
     const following = await this.followRepository.find({
-      where: { followerId: userId },
+      where: { followerId: userId, status: 'accepted' },
       select: ['followingId'],
     });
     const followingIds = following.map(f => f.followingId);
@@ -447,11 +483,12 @@ export class FollowsService {
       return { data: [], hasMore: false, total: 0 };
     }
 
-    // Find mutual follows - users who also follow the current user back
+    // Find mutual follows - users who also follow the current user back (both accepted)
     const mutualFollowsQuery = this.followRepository
       .createQueryBuilder('f')
       .where('f.followerId IN (:...followingIds)', { followingIds })
-      .andWhere('f.followingId = :userId', { userId });
+      .andWhere('f.followingId = :userId', { userId })
+      .andWhere('f.status = :status', { status: 'accepted' });
 
     const total = await mutualFollowsQuery.getCount();
 
@@ -460,6 +497,7 @@ export class FollowsService {
       .select('f.followerId', 'userId')
       .where('f.followerId IN (:...followingIds)', { followingIds })
       .andWhere('f.followingId = :userId', { userId })
+      .andWhere('f.status = :status', { status: 'accepted' })
       .skip(offset)
       .take(limit)
       .getRawMany();
@@ -488,5 +526,198 @@ export class FollowsService {
       hasMore: offset + mutualFollows.length < total,
       total,
     };
+  }
+
+  // Check if a requester can view a user's follower/following/liked list
+  async checkListPrivacy(
+    targetUserId: number,
+    requesterId: number | undefined,
+    listType: 'followers' | 'following' | 'likedVideos',
+  ): Promise<{ allowed: boolean; reason?: string }> {
+    // Self-view always allowed
+    if (requesterId && requesterId === targetUserId) {
+      return { allowed: true };
+    }
+
+    const settings = await this.userSettingsRepository.findOne({ where: { userId: targetUserId } });
+    if (!settings) return { allowed: true };
+
+    let settingValue: string;
+    switch (listType) {
+      case 'followers':
+        settingValue = settings.whoCanViewFollowersList || 'everyone';
+        break;
+      case 'following':
+        settingValue = settings.whoCanViewFollowingList || 'everyone';
+        break;
+      case 'likedVideos':
+        settingValue = settings.whoCanViewLikedVideos || 'everyone';
+        break;
+      default:
+        return { allowed: true };
+    }
+
+    if (settingValue === 'everyone') return { allowed: true };
+
+    if (!requesterId) {
+      return { allowed: false, reason: 'login_required' };
+    }
+
+    if (settingValue === 'friends') {
+      const isFriend = await this.isMutualFollow(targetUserId, requesterId);
+      if (isFriend) return { allowed: true };
+      return { allowed: false, reason: 'friends_only' };
+    }
+
+    if (settingValue === 'onlyMe') {
+      return { allowed: false, reason: 'private' };
+    }
+
+    return { allowed: true };
+  }
+
+  // ===================== FOLLOW REQUEST METHODS =====================
+
+  /**
+   * Get pending incoming follow requests for a user
+   */
+  async getPendingFollowRequests(
+    userId: number,
+    limit: number = 20,
+    offset: number = 0,
+  ): Promise<{ data: { userId: number; username: string; fullName: string | null; avatar: string | null; requestedAt: Date }[]; hasMore: boolean; total: number }> {
+    const total = await this.followRepository.count({ where: { followingId: userId, status: 'pending' } });
+
+    const requests = await this.followRepository.find({
+      where: { followingId: userId, status: 'pending' },
+      order: { createdAt: 'DESC' },
+      skip: offset,
+      take: limit,
+    });
+
+    if (requests.length === 0) {
+      return { data: [], hasMore: false, total };
+    }
+
+    const requesterIds = requests.map(r => r.followerId);
+    const users = await this.userRepository.find({
+      where: { id: In(requesterIds) },
+      select: ['id', 'username', 'fullName', 'avatar'],
+    });
+    const userMap = new Map(users.map(u => [u.id, u]));
+
+    const data = requests
+      .filter(r => userMap.has(r.followerId))
+      .map(r => {
+        const user = userMap.get(r.followerId)!;
+        return {
+          userId: user.id,
+          username: user.username,
+          fullName: user.fullName,
+          avatar: user.avatar,
+          requestedAt: r.createdAt,
+        };
+      });
+
+    return {
+      data,
+      hasMore: offset + requests.length < total,
+      total,
+    };
+  }
+
+  /**
+   * Get count of pending follow requests
+   */
+  async getPendingRequestCount(userId: number): Promise<number> {
+    return this.followRepository.count({ where: { followingId: userId, status: 'pending' } });
+  }
+
+  /**
+   * Approve a follow request
+   */
+  async approveFollowRequest(followerId: number, followingId: number): Promise<{ success: boolean }> {
+    const follow = await this.followRepository.findOne({
+      where: { followerId, followingId, status: 'pending' },
+    });
+
+    if (!follow) {
+      throw new Error('Follow request not found');
+    }
+
+    follow.status = 'accepted';
+    await this.followRepository.save(follow);
+
+    // Log activity
+    try {
+      const requester = await this.userRepository.findOne({ 
+        where: { id: followerId },
+        select: ['id', 'username', 'avatar', 'fullName']
+      });
+      await this.activityHistoryService.logActivity({
+        userId: followingId,
+        actionType: 'approve_follow_request',
+        targetId: followerId.toString(),
+        targetType: 'user',
+        metadata: requester ? {
+          targetUsername: requester.username,
+          targetAvatar: requester.avatar,
+          targetFullName: requester.fullName,
+        } : {},
+      });
+    } catch (e) {
+      console.error('Error logging approve activity:', e);
+    }
+
+    // Send notification: "X accepted your follow request"
+    try {
+      const accepter = await this.userRepository.findOne({ 
+        where: { id: followingId },
+        select: ['id', 'username']
+      });
+      const videoServiceUrl = this.configService.get<string>('VIDEO_SERVICE_URL') || 'http://localhost:3001';
+      await firstValueFrom(
+        this.httpService.post(`${videoServiceUrl}/notifications/create`, {
+          recipientId: followerId.toString(),
+          senderId: followingId.toString(),
+          type: 'follow_request_accepted',
+          senderName: accepter?.username || 'Người dùng',
+        })
+      );
+    } catch (e) {
+      console.error('Error sending follow request accepted notification:', e);
+    }
+
+    return { success: true };
+  }
+
+  /**
+   * Reject a follow request (deletes the record)
+   */
+  async rejectFollowRequest(followerId: number, followingId: number): Promise<{ success: boolean }> {
+    const follow = await this.followRepository.findOne({
+      where: { followerId, followingId, status: 'pending' },
+    });
+
+    if (!follow) {
+      throw new Error('Follow request not found');
+    }
+
+    await this.followRepository.remove(follow);
+
+    // Log activity
+    try {
+      await this.activityHistoryService.logActivity({
+        userId: followingId,
+        actionType: 'reject_follow_request',
+        targetId: followerId.toString(),
+        targetType: 'user',
+        metadata: {},
+      });
+    } catch (e) {
+      console.error('Error logging reject activity:', e);
+    }
+
+    return { success: true };
   }
 }
