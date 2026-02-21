@@ -1,4 +1,4 @@
-﻿import { Controller, Post, Get, Body, Param } from '@nestjs/common';
+﻿import { Controller, Post, Get, Body, Param, Query } from '@nestjs/common';
 import { FcmService } from '../fcm/fcm.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -21,6 +21,158 @@ export class PushController {
     @InjectRepository(UserSettings)
     private readonly userSettingsRepository: Repository<UserSettings>,
   ) {}
+
+  // ============================================
+  // DIAGNOSTIC ENDPOINTS (for debugging FCM issues)
+  // ============================================
+
+  /**
+   * Test FCM connectivity by sending a test notification to a specific user.
+   * Usage: POST /push/test-fcm { "userId": "1" }
+   * OR with a specific token: POST /push/test-fcm { "userId": "1", "fcmToken": "..." }
+   */
+  @Post('test-fcm')
+  async testFcm(@Body() body: { userId?: string; fcmToken?: string }) {
+    const diagnostics: any = {
+      timestamp: new Date().toISOString(),
+      firebaseInitialized: false,
+      tokensFound: 0,
+      results: [],
+    };
+
+    try {
+      // Check Firebase initialization
+      const admin = require('firebase-admin');
+      diagnostics.firebaseInitialized = admin.apps.length > 0;
+      if (admin.apps.length > 0) {
+        diagnostics.firebaseProject = admin.app().options.projectId || admin.app().options.credential?.projectId || 'unknown';
+      }
+
+      let tokens: string[] = [];
+
+      if (body.fcmToken) {
+        // Test with a specific token
+        tokens = [body.fcmToken];
+        diagnostics.tokenSource = 'manual';
+      } else if (body.userId) {
+        // Fetch tokens from DB
+        const sessions = await this.sessionRepository.find({
+          where: { userId: parseInt(body.userId), isActive: true },
+          select: ['id', 'fcmToken', 'platform', 'lastActivityAt'],
+        });
+        
+        diagnostics.activeSessions = sessions.map(s => ({
+          id: s.id,
+          hasFcmToken: !!s.fcmToken,
+          tokenLength: s.fcmToken?.length || 0,
+          tokenPreview: s.fcmToken ? `${s.fcmToken.substring(0, 30)}...${s.fcmToken.substring(s.fcmToken.length - 15)}` : null,
+          platform: s.platform,
+          lastActivity: s.lastActivityAt,
+        }));
+        
+        tokens = sessions
+          .map(s => s.fcmToken)
+          .filter((t): t is string => !!t && t.length > 0);
+        diagnostics.tokenSource = 'database';
+      }
+
+      diagnostics.tokensFound = tokens.length;
+
+      if (tokens.length === 0) {
+        diagnostics.error = 'No FCM tokens to test. Either provide fcmToken in body or ensure user has active sessions with tokens.';
+        return diagnostics;
+      }
+
+      // Send test notification
+      for (const token of tokens) {
+        const testTitle = '🔔 FCM Test';
+        const testBody = `Test push notification at ${new Date().toLocaleTimeString()}`;
+        const testData = { type: 'fcm_test', timestamp: Date.now().toString() };
+
+        console.log(`[FCM-TEST] Sending test push to token: ${token}`);
+        console.log(`[FCM-TEST] Token length: ${token.length}`);
+        console.log(`[FCM-TEST] Token full: ${token}`);
+
+        try {
+          const result = await this.fcmService.sendToDevices(
+            [token],
+            testTitle,
+            testBody,
+            testData,
+          );
+
+          diagnostics.results.push({
+            tokenPreview: `${token.substring(0, 30)}...${token.substring(token.length - 15)}`,
+            tokenLength: token.length,
+            success: result.successCount > 0,
+            successCount: result.successCount,
+            failureCount: result.failureCount,
+            errors: result.errors,
+          });
+        } catch (err: any) {
+          diagnostics.results.push({
+            tokenPreview: `${token.substring(0, 30)}...${token.substring(token.length - 15)}`,
+            success: false,
+            error: err.message,
+          });
+        }
+      }
+    } catch (error: any) {
+      diagnostics.criticalError = error.message;
+    }
+
+    console.log('[FCM-TEST] Diagnostics result:', JSON.stringify(diagnostics, null, 2));
+    return diagnostics;
+  }
+
+  /**
+   * Get FCM debug info for a user — shows all sessions, tokens, and Firebase status
+   * Usage: GET /push/debug/1
+   */
+  @Get('debug/:userId')
+  async debugFcm(@Param('userId') userId: string) {
+    try {
+      const sessions = await this.sessionRepository.find({
+        where: { userId: parseInt(userId), isActive: true },
+        select: ['id', 'fcmToken', 'platform', 'deviceName', 'lastActivityAt', 'loginAt'],
+      });
+
+      const settings = await this.userSettingsRepository.findOne({
+        where: { userId: parseInt(userId) },
+      });
+
+      const admin = require('firebase-admin');
+      
+      return {
+        userId,
+        firebase: {
+          initialized: admin.apps.length > 0,
+          projectId: admin.apps.length > 0 ? (admin.app().options.projectId || 'unknown') : 'not initialized',
+        },
+        pushSettings: {
+          pushNotifications: settings?.pushNotifications ?? true,
+          pushMessages: settings?.pushMessages ?? true,
+          pushLikes: settings?.pushLikes ?? true,
+          pushComments: settings?.pushComments ?? true,
+          pushNewFollowers: settings?.pushNewFollowers ?? true,
+        },
+        sessions: sessions.map(s => ({
+          id: s.id,
+          platform: s.platform,
+          deviceName: s.deviceName,
+          hasFcmToken: !!s.fcmToken,
+          fcmTokenLength: s.fcmToken?.length || 0,
+          fcmTokenPreview: s.fcmToken ? `${s.fcmToken.substring(0, 40)}...${s.fcmToken.substring(s.fcmToken.length - 15)}` : null,
+          lastActivity: s.lastActivityAt,
+          loginAt: s.loginAt,
+        })),
+        totalSessions: sessions.length,
+        sessionsWithToken: sessions.filter(s => !!s.fcmToken).length,
+      };
+    } catch (error: any) {
+      return { error: error.message };
+    }
+  }
 
   /**
    * Check if a specific notification type is enabled for this user
@@ -89,14 +241,17 @@ export class PushController {
         select: ['fcmToken'],
       });
 
-      // Filter sessions with valid FCM tokens
-      const fcmTokens = sessions
-        .map((s) => s.fcmToken)
-        .filter((token): token is string => !!token && token.length > 0);
+      // Filter sessions with valid FCM tokens and deduplicate
+      const fcmTokens = [...new Set(
+        sessions
+          .map((s) => s.fcmToken)
+          .filter((token): token is string => !!token && token.length > 0)
+      )];
 
       console.log(`[PUSH] Found ${sessions.length} active sessions, ${fcmTokens.length} FCM tokens for userId=${dto.userId}`);
       fcmTokens.forEach((token, i) => {
-        console.log(`[PUSH] Token[${i}]: ${token.substring(0, 20)}...${token.substring(token.length - 10)}`);
+        console.log(`[PUSH] Token[${i}]: ${token.substring(0, 30)}...${token.substring(token.length - 15)} (len=${token.length})`);
+        console.log(`[PUSH] Token[${i}] FULL: ${token}`);
       });
 
       if (fcmTokens.length === 0) {
@@ -117,21 +272,22 @@ export class PushController {
       // Clean up invalid FCM tokens (expired, unregistered, etc.)
       if (result.failedTokens.length > 0) {
         const invalidCodes = ['messaging/invalid-registration-token', 'messaging/registration-token-not-registered'];
-        const tokensToClean = result.errors
-          .filter(e => invalidCodes.includes(e.code))
-          .map(e => result.failedTokens.find(t => t.startsWith(e.token.replace('...', ''))))
-          .filter(Boolean);
-
-        // Actually clean all failed tokens from sessions to force re-registration
-        for (const failedToken of result.failedTokens) {
-          try {
-            await this.sessionRepository.update(
-              { fcmToken: failedToken },
-              { fcmToken: null as any },
-            );
-            console.log(`[PUSH] Cleaned up invalid FCM token: ${failedToken.substring(0, 20)}...`);
-          } catch (e) {
-            // Ignore cleanup errors
+        
+        // Only clean tokens with permanent error codes, not transient failures
+        for (let i = 0; i < result.errors.length; i++) {
+          if (invalidCodes.includes(result.errors[i].code)) {
+            const tokenToClean = result.failedTokens[i];
+            if (tokenToClean) {
+              try {
+                await this.sessionRepository.update(
+                  { fcmToken: tokenToClean },
+                  { fcmToken: null as any },
+                );
+                console.log(`[PUSH] Cleaned up invalid FCM token: ${tokenToClean.substring(0, 20)}...`);
+              } catch (e) {
+                // Ignore cleanup errors
+              }
+            }
           }
         }
       }

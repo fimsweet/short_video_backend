@@ -332,6 +332,59 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
     }
   }
 
+  // ========== THEME COLOR CHANGE (Real-time) ==========
+
+  @SubscribeMessage('changeThemeColor')
+  async handleChangeThemeColor(@MessageBody() data: {
+    senderId: string;
+    recipientId: string;
+    themeColor: string;
+    senderName?: string;
+  }) {
+    try {
+      // Update BOTH participants' theme color (shared like Messenger)
+      await this.messagesService.updateSharedThemeColor(
+        data.senderId,
+        data.recipientId,
+        data.themeColor,
+      );
+
+      // Create a system message for the theme change
+      const message = await this.messagesService.createSystemMessage(
+        data.senderId,
+        data.recipientId,
+        `[THEME_CHANGE:${data.themeColor}]`,
+      );
+
+      const messageData = {
+        id: message.id,
+        senderId: message.senderId,
+        recipientId: message.recipientId,
+        content: message.content,
+        createdAt: message.createdAt instanceof Date ? message.createdAt.toISOString() : message.createdAt,
+        isRead: message.isRead,
+        conversationId: message.conversationId,
+      };
+
+      // Emit system message to BOTH users via normal message channels
+      this.server.to(`user_${data.recipientId}`).emit('newMessage', messageData);
+      this.server.to(`user_${data.senderId}`).emit('messageSent', messageData);
+
+      // Emit theme color changed event to recipient so their chat updates in real-time
+      this.server.to(`user_${data.recipientId}`).emit('themeColorChanged', {
+        conversationId: message.conversationId,
+        themeColor: data.themeColor,
+        changedBy: data.senderId,
+      });
+
+      console.log(`Theme color changed to ${data.themeColor} by user ${data.senderId} in conversation with ${data.recipientId}`);
+      return { success: true, message: messageData };
+    } catch (error) {
+      console.error('Error changing theme color:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
   // ========== PUBLIC METHOD FOR HTTP CONTROLLER ==========
 
   /**

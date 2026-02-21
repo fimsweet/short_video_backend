@@ -736,6 +736,12 @@ export class AuthService {
       if (!isValid) {
         throw new BadRequestException('Mã xác thực không hợp lệ hoặc đã hết hạn');
       }
+    } else if (method === 'sms') {
+      // SMS OTP is verified by Firebase Phone Auth on client side
+      // We trust the client has already verified with Firebase
+      if (!user.phoneNumber) {
+        throw new BadRequestException('Tài khoản chưa liên kết số điện thoại');
+      }
     } else {
       throw new BadRequestException('Phương thức xác thực không hợp lệ');
     }

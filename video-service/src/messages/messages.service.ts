@@ -98,7 +98,9 @@ export class MessagesService {
         content,
         conversationId,
         senderId,
-      );
+      ).catch(err => {
+        console.error('[PUSH] Error sending message notification:', err?.message || err);
+      });
     }
 
     return savedMessage;
@@ -303,6 +305,73 @@ export class MessagesService {
     await this.conversationRepository.save(conversation);
   }
 
+  /**
+   * Update theme color for BOTH participants in a conversation (shared theme like Messenger).
+   * Returns true if the theme was actually changed.
+   */
+  async updateSharedThemeColor(
+    userId: string,
+    recipientId: string,
+    themeColor: string,
+  ): Promise<boolean> {
+    const conversationId = this.getConversationId(userId, recipientId);
+    let conversation = await this.conversationRepository.findOne({
+      where: { id: conversationId },
+    });
+
+    if (!conversation) {
+      const sorted = [userId, recipientId].sort();
+      conversation = this.conversationRepository.create({
+        id: conversationId,
+        participant1Id: sorted[0],
+        participant2Id: sorted[1],
+      });
+    }
+
+    // Set BOTH participants to the same theme color
+    conversation.themeColorBy1 = themeColor;
+    conversation.themeColorBy2 = themeColor;
+    await this.conversationRepository.save(conversation);
+    return true;
+  }
+
+  /**
+   * Create a system message (no push notification, no lastMessage update).
+   * Used for theme changes, nickname changes, etc.
+   */
+  async createSystemMessage(
+    senderId: string,
+    recipientId: string,
+    content: string,
+  ): Promise<Message> {
+    const conversationId = this.getConversationId(senderId, recipientId);
+
+    // Ensure conversation exists
+    let conversation = await this.conversationRepository.findOne({
+      where: { id: conversationId },
+    });
+    if (!conversation) {
+      const sorted = [senderId, recipientId].sort();
+      conversation = this.conversationRepository.create({
+        id: conversationId,
+        participant1Id: sorted[0],
+        participant2Id: sorted[1],
+      });
+      await this.conversationRepository.save(conversation);
+    }
+
+    // Create message without updating lastMessage or sending push
+    const message = this.messageRepository.create({
+      senderId,
+      recipientId,
+      content,
+      conversationId,
+      isRead: false,
+    });
+
+    return this.messageRepository.save(message);
+  }
+
   // ========== PINNED MESSAGES ==========
 
   async pinMessage(messageId: string, userId: string): Promise<Message> {
@@ -332,20 +401,33 @@ export class MessagesService {
       throw new ForbiddenException('You cannot unpin this message');
     }
 
-    message.pinnedBy = undefined as any;
-    message.pinnedAt = undefined as any;
-    return this.messageRepository.save(message);
+    // Use update() to reliably set NULL in DB (save() with null can be unreliable)
+    await this.messageRepository.update(messageId, {
+      pinnedBy: null as any,
+      pinnedAt: null as any,
+    });
+
+    // Return updated entity
+    const updated = await this.messageRepository.findOne({ where: { id: messageId } });
+    if (!updated) {
+      throw new NotFoundException('Message not found after update');
+    }
+    return updated;
   }
 
   async getPinnedMessages(userId: string, recipientId: string): Promise<Message[]> {
     const conversationId = this.getConversationId(userId, recipientId);
-    return this.messageRepository.find({
-      where: { 
-        conversationId, 
-        pinnedBy: userId,
-      },
-      order: { pinnedAt: 'DESC' },
-    });
+    return this.messageRepository
+      .createQueryBuilder('message')
+      .where('message.conversationId = :conversationId', { conversationId })
+      .andWhere('message.pinnedBy = :userId', { userId })
+      .andWhere('message.isDeletedForEveryone = false')
+      .andWhere(
+        '(message.deletedForUserIds IS NULL OR message.deletedForUserIds NOT LIKE :userPattern)',
+        { userPattern: `%${userId}%` },
+      )
+      .orderBy('message.pinnedAt', 'DESC')
+      .getMany();
   }
 
   // ========== SEARCH MESSAGES ==========
@@ -508,6 +590,12 @@ export class MessagesService {
     message.deletedForEveryoneBy = userId;
     message.content = ''; // Clear content
     message.imageUrls = []; // Clear images
+
+    // Also unpin the message if it was pinned
+    if (message.pinnedBy) {
+      message.pinnedBy = null as any;
+      message.pinnedAt = null as any;
+    }
     
     await this.messageRepository.save(message);
 

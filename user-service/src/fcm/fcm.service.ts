@@ -144,10 +144,15 @@ export class FcmService {
           failedTokens.push(fcmTokens[idx]);
           const errorCode = resp.error?.code || 'UNKNOWN';
           const errorMessage = resp.error?.message || 'Unknown error';
-          errors.push({ token: fcmTokens[idx].substring(0, 20) + '...', code: errorCode, message: errorMessage });
+          errors.push({ token: fcmTokens[idx].substring(0, 30) + '...', code: errorCode, message: errorMessage });
           this.logger.error(
             `FCM send failed for token[${idx}]: code=${errorCode}, message=${errorMessage}`,
           );
+          this.logger.error(
+            `FCM failed token[${idx}] FULL: ${fcmTokens[idx]}`,
+          );
+        } else {
+          this.logger.log(`FCM send SUCCESS for token[${idx}]: messageId=${resp.messageId}`);
         }
       });
 

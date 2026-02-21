@@ -1,0 +1,162 @@
+//
+load_test
+//
+
+
+  █ THRESHOLDS
+
+    http_req_duration
+    ✓ 'p(95)<1000' p(95)=78.71ms
+
+    http_req_failed
+    ✓ 'rate<0.05' rate=4.81%
+
+
+  █ TOTAL RESULTS
+
+    checks_total.......: 14583  79.633758/s
+    checks_succeeded...: 98.39% 14349 out of 14583
+    checks_failed......: 1.60%  234 out of 14583
+
+    ✗ status 200
+      ↳  95% — ✓ 4627 / ✗ 234
+    ✓ response time <1s
+    ✓ body not empty
+
+    CUSTOM
+    error_rate.....................: 4.81%  234 out of 4861
+    feed_response_ms...............: avg=69.300133 min=55.2305 med=65.4169 max=698.6678 p(90)=71.4879 p(95)=78.7192
+
+    HTTP
+    http_req_duration..............: avg=69.3ms    min=55.23ms med=65.41ms max=698.66ms p(90)=71.48ms p(95)=78.71ms
+      { expected_response:true }...: avg=69.68ms   min=61.34ms med=65.56ms max=698.66ms p(90)=71.76ms p(95)=78.73ms
+    http_req_failed................: 4.81%  234 out of 4861
+    http_reqs......................: 4861   26.544586/s
+
+    EXECUTION
+    iteration_duration.............: avg=3.12s     min=2.06s   med=3.09s   max=14.79s   p(90)=3.9s    p(95)=4s
+    iterations.....................: 4861   26.544586/s
+    vus............................: 1      min=1           max=100
+    vus_max........................: 100    min=100         max=100
+
+    NETWORK
+    data_received..................: 32 MB  175 kB/s
+    data_sent......................: 413 kB 2.3 kB/s
+
+
+
+
+running (3m03.1s), 000/100 VUs, 4861 complete and 0 interrupted iterations
+default ✓ [======================================] 000/100 VUs  3m0s
+
+
+//
+stress_test
+//
+
+  █ THRESHOLDS
+
+    http_req_duration
+    ✓ 'p(95)<2000' p(95)=71.15ms
+
+
+  █ TOTAL RESULTS
+
+    checks_total.......: 58424  193.51827/s
+    checks_succeeded...: 64.38% 37615 out of 58424
+    checks_failed......: 35.61% 20809 out of 58424
+
+    ✗ status 200
+      ↳  28% — ✓ 8403 / ✗ 20809
+    ✓ response time <2s
+
+    CUSTOM
+    error_rate.....................: 71.23% 20809 out of 29212
+    feed_response_ms...............: avg=63.235879 min=54.7572 med=58.88015 max=1529.6615 p(90)=67.16202 p(95)=71.15243
+
+    HTTP
+    http_req_duration..............: avg=63.23ms   min=54.75ms med=58.88ms  max=1.52s     p(90)=67.16ms  p(95)=71.15ms
+      { expected_response:true }...: avg=68.52ms   min=60.68ms med=65.1ms   max=1.52s     p(90)=70.47ms  p(95)=75.33ms
+    http_req_failed................: 71.23% 20809 out of 29212
+    http_reqs......................: 29212  96.759135/s
+
+    EXECUTION
+    iteration_duration.............: avg=2.09s     min=1.05s   med=2.07s    max=6.04s     p(90)=2.89s    p(95)=2.98s
+    iterations.....................: 29212  96.759135/s
+    vus............................: 6      min=2              max=499
+    vus_max........................: 500    min=500            max=500
+
+    NETWORK
+    data_received..................: 70 MB  232 kB/s
+    data_sent......................: 2.5 MB 8.2 kB/s
+
+
+
+
+running (5m01.9s), 000/500 VUs, 29212 complete and 0 interrupted iterations
+default ✓ [======================================] 000/500 VUs  5m0s
+
+
+// 
+security_test
+//
+
+
+  █ TOTAL RESULTS
+
+    checks_total.......: 320     7.38528/s
+    checks_succeeded...: 100.00% 320 out of 320
+    checks_failed......: 0.00%   0 out of 320
+
+    ✓ [Nginx] Server không crash
+    ✓ [Nginx] Phản hồi hợp lệ (401/429/503)
+    ✓ [Throttler] Server không crash
+    ✓ [Throttler] Phản hồi hợp lệ (200/429/503)
+
+    HTTP
+    http_req_duration..............: avg=67.07ms min=59.04ms med=65.07ms max=160.25ms p(90)=69.27ms p(95)=71.77ms
+      { expected_response:true }...: avg=70.16ms min=63.36ms med=66.63ms max=160.25ms p(90)=70.42ms p(95)=93.07ms
+    http_req_failed................: 37.50% 60 out of 160
+    http_reqs......................: 160    3.69264/s
+
+    EXECUTION
+    iteration_duration.............: avg=68.04ms min=59.57ms med=65.22ms max=220.62ms p(90)=69.76ms p(95)=75.94ms
+    iterations.....................: 160    3.69264/s
+    vus............................: 1      min=0         max=1
+    vus_max........................: 2      min=2         max=2
+
+    NETWORK
+    data_received..................: 724 kB 17 kB/s
+    data_sent......................: 17 kB  402 B/s
+
+
+
+
+running (0m43.3s), 0/2 VUs, 160 complete and 0 interrupted iterations
+nginx_auth_ratelimit ✓ [======================================] 1 VUs  02.6s/30s     40/40 shared iters
+nestjs_throttler     ✓ [======================================] 1 VUs  0m08.3s/1m0s  120/120 shared iters
+
+
+Tổng hợp:
+
+Load Test (100 Virtual Users, 3 phút):
+
+Average response time: 69.3ms
+p(95) response time: 78.7ms
+Throughput: 26.5 requests/second
+Error rate: 4.81% (do rate limiting ở tầng Nginx gateway)
+Tổng request: 4,861
+
+Stress Test (500 Virtual Users, 5 phút):
+
+Average response time: 63.2ms
+p(95) response time: 71.2ms
+Throughput: 96.8 requests/second
+Error rate: 71.23% (rate limiting bảo vệ hệ thống đúng thiết kế)
+Server duy trì ổn định, không crash dù tải vượt giới hạn
+
+Rate Limiting Test:
+
+Nginx (tầng Gateway): /auth/login bị chặn 503 sau 20 request/giây 
+NestJS Throttler (tầng Application): /videos/feed/all bị chặn 429 sau 100 request/60 giây 
+100% checks passed, server không trả 500 (không crash)

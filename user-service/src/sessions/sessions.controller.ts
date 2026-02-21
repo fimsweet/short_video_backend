@@ -58,6 +58,22 @@ export class SessionsController {
   }
 
   /**
+   * Clear FCM token on logout (prevents stale push notifications)
+   */
+  @Post('clear-fcm-token')
+  async clearFcmToken(
+    @Request() req,
+    @Headers('authorization') authHeader: string,
+  ) {
+    const token = authHeader?.replace('Bearer ', '');
+    const result = await this.sessionsService.clearFcmToken(req.user.id, token);
+    return {
+      success: result.success,
+      message: 'FCM token cleared',
+    };
+  }
+
+  /**
    * Get login alerts status
    */
   @Get('login-alerts')

@@ -4,6 +4,7 @@ import { Repository, Not } from 'typeorm';
 import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 import { UserSession, DevicePlatform } from '../entities/user-session.entity';
 import { FcmService } from '../fcm/fcm.service';
+import * as crypto from 'crypto';
 
 export interface CreateSessionDto {
   userId: number;
@@ -236,6 +237,7 @@ export class SessionsService {
 
     session.isActive = false;
     session.logoutAt = new Date();
+    session.fcmToken = null;
     await this.sessionRepository.save(session);
 
     // Invalidate token in cache (blacklist)
@@ -263,10 +265,10 @@ export class SessionsService {
       await this.cacheManager.set(`token_blacklist:${session.token}`, true, 86400000);
     }
 
-    // Mark all as inactive
+    // Mark all as inactive and clear FCM tokens
     await this.sessionRepository.update(
       { userId, isActive: true, token: Not(currentHash) },
-      { isActive: false, logoutAt: new Date() }
+      { isActive: false, logoutAt: new Date(), fcmToken: null as any }
     );
 
     // Clear cache
@@ -288,10 +290,10 @@ export class SessionsService {
       await this.cacheManager.set(`token_blacklist:${session.token}`, true, 86400000);
     }
 
-    // Mark all as inactive
+    // Mark all as inactive and clear FCM tokens
     await this.sessionRepository.update(
       { userId, isActive: true },
-      { isActive: false, logoutAt: new Date() }
+      { isActive: false, logoutAt: new Date(), fcmToken: null as any }
     );
 
     // Clear cache
@@ -343,11 +345,60 @@ export class SessionsService {
   }
 
   /**
+   * Clear FCM token from the current session (used on logout)
+   */
+  async clearFcmToken(userId: number, token: string): Promise<{ success: boolean }> {
+    const tokenHash = this.hashToken(token);
+    
+    // Clear FCM token from session matching this JWT
+    const result = await this.sessionRepository.update(
+      { userId, token: tokenHash, isActive: true },
+      { fcmToken: null as any },
+    );
+
+    if (result.affected && result.affected > 0) {
+      console.log(`[SESSION] FCM token cleared for userId=${userId}`);
+      return { success: true };
+    }
+
+    // Fallback: clear from most recent active session
+    const latestSession = await this.sessionRepository.findOne({
+      where: { userId, isActive: true },
+      order: { lastActivityAt: 'DESC' },
+    });
+
+    if (latestSession && latestSession.fcmToken) {
+      latestSession.fcmToken = null;
+      await this.sessionRepository.save(latestSession);
+      console.log(`[SESSION] FCM token cleared via fallback for userId=${userId}`);
+      return { success: true };
+    }
+
+    return { success: true };
+  }
+
+  /**
    * Update FCM token for a session
-   * First tries exact token hash match, then falls back to most recent active session
+   * First deduplicates the token (removes from ALL other sessions), then assigns it
    */
   async updateFcmToken(userId: number, token: string, fcmToken: string): Promise<{ success: boolean }> {
     const tokenHash = this.hashToken(token);
+    
+    // CRITICAL: Remove this FCM token from ALL other sessions (any user)
+    // This prevents the "wrong user gets push" bug when switching accounts on same device
+    try {
+      const deduped = await this.sessionRepository
+        .createQueryBuilder()
+        .update(UserSession)
+        .set({ fcmToken: null as any })
+        .where('fcmToken = :fcmToken', { fcmToken })
+        .execute();
+      if (deduped.affected && deduped.affected > 0) {
+        console.log(`[SESSION] Deduplicated FCM token: cleared from ${deduped.affected} other session(s)`);
+      }
+    } catch (e) {
+      console.error('[SESSION] Error deduplicating FCM token:', e);
+    }
     
     // Try exact match first (session created with same JWT)
     const result = await this.sessionRepository.update(
@@ -356,6 +407,8 @@ export class SessionsService {
     );
 
     if (result.affected && result.affected > 0) {
+      console.log(`[SESSION] FCM token updated for userId=${userId} (exact match, len=${fcmToken.length})`);
+      console.log(`[SESSION] FCM token FULL: ${fcmToken}`);
       return { success: true };
     }
 
@@ -373,7 +426,8 @@ export class SessionsService {
       latestSession.token = tokenHash;
       latestSession.lastActivityAt = new Date();
       await this.sessionRepository.save(latestSession);
-      console.log(`[SESSION] FCM token updated via fallback for userId=${userId} (session ${latestSession.id})`);
+      console.log(`[SESSION] FCM token updated via fallback for userId=${userId} (session ${latestSession.id}, len=${fcmToken.length})`);
+      console.log(`[SESSION] FCM token FULL: ${fcmToken}`);
       return { success: true };
     }
 
@@ -427,16 +481,15 @@ export class SessionsService {
   }
 
   /**
-   * Hash token for storage (only store identifiable part)
+   * Hash token for storage using SHA-256
    */
   private hashToken(token: string): string {
-    // Store first 10 + last 10 chars for identification
     if (token.length <= 20) return token;
-    return `${token.substring(0, 10)}...${token.substring(token.length - 10)}`;
+    return crypto.createHash('sha256').update(token).digest('hex').substring(0, 64);
   }
 
   private findSessionIdByToken(sessions: SessionInfo[], tokenHash: string): number | null {
-    // This is a helper, in real implementation we'd need full token comparison
-    return null;
+    const match = sessions.find(s => (s as any)._tokenHash === tokenHash);
+    return match ? match.id : null;
   }
 }
