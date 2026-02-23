@@ -95,6 +95,9 @@
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
+    "transformIgnorePatterns": [
+      "node_modules/(?!(otplib|@otplib|@scure|uuid|@noble)/)"
+    ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],

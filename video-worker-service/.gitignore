@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .env
+
+# Test coverage
+/coverage
 processed_videos/*
 !processed_videos/.gitkeep
 *.log

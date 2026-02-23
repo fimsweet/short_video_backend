@@ -30,7 +30,7 @@ interface ScoredVideo {
 }
 
 // Algorithm weights - tunable parameters
-const WEIGHTS = {
+export const WEIGHTS = {
   INTEREST_MATCH: 0.30, // From user interests + watch time
   ENGAGEMENT: 0.25,      // Likes, views ratio
   RECENCY: 0.20,         // Newer videos preferred
@@ -39,7 +39,7 @@ const WEIGHTS = {
 };
 
 // Discovery ratio: ensure ~20% of feed is from unexplored categories
-const DISCOVERY_RATIO = 0.20;
+export const DISCOVERY_RATIO = 0.20;
 
 // How many recently watched videos to completely exclude (not just penalize)
 const EXCLUDE_RECENTLY_WATCHED = 50;

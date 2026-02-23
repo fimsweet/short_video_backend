@@ -5,6 +5,9 @@
 /dist
 /build
 
+# Test coverage
+/coverage
+
 # Logs
 logs
 *.log
