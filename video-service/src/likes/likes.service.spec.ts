@@ -83,47 +83,49 @@ describe('LikesService', () => {
     expect(service).toBeDefined();
   });
 
-  describe('toggleLike', () => {
-    it('should like a video when not already liked', async () => {
-      likeRepo.findOne.mockResolvedValue(null);
-      const result = await service.toggleLike('v1', 'u1');
-      expect(result.liked).toBe(true);
-      expect(likeRepo.save).toHaveBeenCalledWith({ videoId: 'v1', userId: 'u1' });
-      expect(activityLoggerService.logActivity).toHaveBeenCalled();
-    });
+  describe('UT-SOC-01: Interaction toggle consistency', () => {
+    describe('toggleLike', () => {
+      it('should like a video when not already liked', async () => {
+        likeRepo.findOne.mockResolvedValue(null);
+        const result = await service.toggleLike('v1', 'u1');
+        expect(result.liked).toBe(true);
+        expect(likeRepo.save).toHaveBeenCalledWith({ videoId: 'v1', userId: 'u1' });
+        expect(activityLoggerService.logActivity).toHaveBeenCalled();
+      });
 
-    it('should unlike a video when already liked', async () => {
-      likeRepo.findOne.mockResolvedValue({ id: 1, videoId: 'v1', userId: 'u1' });
-      const result = await service.toggleLike('v1', 'u1');
-      expect(result.liked).toBe(false);
-      expect(likeRepo.remove).toHaveBeenCalled();
-    });
+      it('should unlike a video when already liked', async () => {
+        likeRepo.findOne.mockResolvedValue({ id: 1, videoId: 'v1', userId: 'u1' });
+        const result = await service.toggleLike('v1', 'u1');
+        expect(result.liked).toBe(false);
+        expect(likeRepo.remove).toHaveBeenCalled();
+      });
 
-    it('should send notification when liking another user video', async () => {
-      likeRepo.findOne.mockResolvedValue(null);
-      await service.toggleLike('v1', 'u1');
-      expect(notificationsService.createNotification).toHaveBeenCalled();
-    });
+      it('should send notification when liking another user video', async () => {
+        likeRepo.findOne.mockResolvedValue(null);
+        await service.toggleLike('v1', 'u1');
+        expect(notificationsService.createNotification).toHaveBeenCalled();
+      });
 
-    it('should not send notification when liking own video', async () => {
-      likeRepo.findOne.mockResolvedValue(null);
-      videoRepo.findOne.mockResolvedValue({ id: 'v1', userId: 'u1', title: 'My Video' });
-      await service.toggleLike('v1', 'u1');
-      expect(notificationsService.createNotification).not.toHaveBeenCalled();
-    });
+      it('should not send notification when liking own video', async () => {
+        likeRepo.findOne.mockResolvedValue(null);
+        videoRepo.findOne.mockResolvedValue({ id: 'v1', userId: 'u1', title: 'My Video' });
+        await service.toggleLike('v1', 'u1');
+        expect(notificationsService.createNotification).not.toHaveBeenCalled();
+      });
 
-    it('should handle notification error gracefully', async () => {
-      likeRepo.findOne.mockResolvedValue(null);
-      notificationsService.createNotification.mockRejectedValue(new Error('fail'));
-      const result = await service.toggleLike('v1', 'u1');
-      expect(result.liked).toBe(true);
-    });
+      it('should handle notification error gracefully', async () => {
+        likeRepo.findOne.mockResolvedValue(null);
+        notificationsService.createNotification.mockRejectedValue(new Error('fail'));
+        const result = await service.toggleLike('v1', 'u1');
+        expect(result.liked).toBe(true);
+      });
 
-    it('should handle video not found', async () => {
-      videoRepo.findOne.mockResolvedValue(null);
-      likeRepo.findOne.mockResolvedValue(null);
-      const result = await service.toggleLike('v1', 'u1');
-      expect(result.liked).toBe(true);
+      it('should handle video not found', async () => {
+        videoRepo.findOne.mockResolvedValue(null);
+        likeRepo.findOne.mockResolvedValue(null);
+        const result = await service.toggleLike('v1', 'u1');
+        expect(result.liked).toBe(true);
+      });
     });
   });
 

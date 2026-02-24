@@ -77,42 +77,44 @@ describe('MessagesGateway', () => {
     });
   });
 
-  describe('handleJoin', () => {
-    it('should register user socket and return success', async () => {
-      const client = { id: 'socket1', join: jest.fn() } as any;
-      // Mock fetch for showOnlineStatus
-      jest.spyOn(global, 'fetch').mockResolvedValue({
-        ok: true,
-        json: jest.fn().mockResolvedValue({ settings: { showOnlineStatus: true } }),
-      } as any);
-      const result = await gateway.handleJoin(client, { userId: 'u1' });
-      expect(result).toEqual({ success: true });
-      expect(client.join).toHaveBeenCalledWith('user_u1');
-    });
+  describe('UT-GW-01: Identity context establishment via join event', () => {
+    describe('handleJoin', () => {
+      it('should register user socket and return success', async () => {
+        const client = { id: 'socket1', join: jest.fn() } as any;
+        // Mock fetch for showOnlineStatus
+        jest.spyOn(global, 'fetch').mockResolvedValue({
+          ok: true,
+          json: jest.fn().mockResolvedValue({ settings: { showOnlineStatus: true } }),
+        } as any);
+        const result = await gateway.handleJoin(client, { userId: 'u1' });
+        expect(result).toEqual({ success: true });
+        expect(client.join).toHaveBeenCalledWith('user_u1');
+      });
 
-    it('should return error when no userId', async () => {
-      const client = { id: 'socket1' } as any;
-      const result = await gateway.handleJoin(client, { userId: '' });
-      expect(result).toEqual({ success: false, error: 'userId required' });
-    });
+      it('should return error when no userId', async () => {
+        const client = { id: 'socket1' } as any;
+        const result = await gateway.handleJoin(client, { userId: '' });
+        expect(result).toEqual({ success: false, error: 'userId required' });
+      });
 
-    it('should handle fetch error for showOnlineStatus', async () => {
-      const client = { id: 'socket1', join: jest.fn() } as any;
-      jest.spyOn(global, 'fetch').mockRejectedValue(new Error('network'));
-      const result = await gateway.handleJoin(client, { userId: 'u1' });
-      expect(result).toEqual({ success: true });
-    });
+      it('should handle fetch error for showOnlineStatus', async () => {
+        const client = { id: 'socket1', join: jest.fn() } as any;
+        jest.spyOn(global, 'fetch').mockRejectedValue(new Error('network'));
+        const result = await gateway.handleJoin(client, { userId: 'u1' });
+        expect(result).toEqual({ success: true });
+      });
 
-    it('should add user to hidden set when showOnlineStatus=false', async () => {
-      const client = { id: 'socket1', join: jest.fn() } as any;
-      jest.spyOn(global, 'fetch').mockResolvedValue({
-        ok: true,
-        json: jest.fn().mockResolvedValue({ settings: { showOnlineStatus: false } }),
-      } as any);
-      await gateway.handleJoin(client, { userId: 'u1' });
-      // The user's online status should show as offline
-      const status = gateway.handleGetOnlineStatus({ userId: 'u1' });
-      expect(status.isOnline).toBe(false);
+      it('should add user to hidden set when showOnlineStatus=false', async () => {
+        const client = { id: 'socket1', join: jest.fn() } as any;
+        jest.spyOn(global, 'fetch').mockResolvedValue({
+          ok: true,
+          json: jest.fn().mockResolvedValue({ settings: { showOnlineStatus: false } }),
+        } as any);
+        await gateway.handleJoin(client, { userId: 'u1' });
+        // The user's online status should show as offline
+        const status = gateway.handleGetOnlineStatus({ userId: 'u1' });
+        expect(status.isOnline).toBe(false);
+      });
     });
   });
 
