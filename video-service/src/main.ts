@@ -34,33 +34,35 @@ async function bootstrap() {
     next();
   }, express.static(uploadsPath));
 
-  // Serve static files for processed videos from video-worker-service
-  const processedVideosPath = join(__dirname, '..', '..', 'video-worker-service', 'processed_videos');
+  // ============================================
+  // Serve processed videos (HLS segments, thumbnails)
+  // ============================================
+  // Local dev: worker writes to ../video-worker-service/processed_videos/
+  // Docker: worker writes to /app/uploads/processed_videos/ (shared volume)
+  // S3 mode: files served via CloudFront — this handler is backup only
+  // ============================================
+  const processedVideosPathLocal = join(__dirname, '..', '..', 'video-worker-service', 'processed_videos');
+  const processedVideosPathDocker = join(__dirname, '..', 'uploads', 'processed_videos');
+  
+  // Use Docker path if it exists, otherwise local dev path
+  const processedVideosPath = fs.existsSync(processedVideosPathDocker)
+    ? processedVideosPathDocker
+    : processedVideosPathLocal;
+  
   console.log('Serving processed videos from:', processedVideosPath);
   console.log('Path exists?', fs.existsSync(processedVideosPath));
 
-  if (fs.existsSync(processedVideosPath)) {
-    const folders = fs.readdirSync(processedVideosPath);
-    console.log('Folders in processed_videos:', folders);
-
-    // Log thumbnail files
-    folders.forEach(folder => {
-      const folderPath = join(processedVideosPath, folder);
-      if (fs.statSync(folderPath).isDirectory()) {
-        const files = fs.readdirSync(folderPath);
-        console.log(`  ${folder}:`, files);
-      }
-    });
-  }
-
   app.use('/uploads/processed_videos', (req, res, next) => {
-    console.log('Serving file:', req.url);
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET');
     res.header('Cross-Origin-Resource-Policy', 'cross-origin');
 
-    // Set proper content type for images
-    if (req.url.endsWith('.jpg') || req.url.endsWith('.jpeg')) {
+    // Set proper content type for HLS and images
+    if (req.url.endsWith('.m3u8')) {
+      res.header('Content-Type', 'application/vnd.apple.mpegurl');
+    } else if (req.url.endsWith('.ts')) {
+      res.header('Content-Type', 'video/mp2t');
+    } else if (req.url.endsWith('.jpg') || req.url.endsWith('.jpeg')) {
       res.header('Content-Type', 'image/jpeg');
     } else if (req.url.endsWith('.png')) {
       res.header('Content-Type', 'image/png');

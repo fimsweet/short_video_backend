@@ -49,7 +49,9 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       if (sockets.delete(client.id)) {
         if (sockets.size === 0) {
           this.userSockets.delete(userId);
-          this.onlineUsers.delete(userId);
+          // Keep lastSeen timestamp before removing from onlineUsers
+          const lastSeenDate = this.onlineUsers.get(userId) || new Date();
+          this.onlineUsers.set(userId, lastSeenDate);
           disconnectedUserId = userId;
         }
       }
@@ -135,6 +137,7 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       userId,
       isOnline,
       timestamp: new Date().toISOString(),
+      lastSeen: this.onlineUsers.get(userId)?.toISOString() || new Date().toISOString(),
     };
     // Emit to subscribers of this user's online status
     this.server.to(`online_status_${userId}`).emit('userOnlineStatus', payload);
@@ -203,6 +206,7 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
         userId: data.userId,
         isOnline: false,
         timestamp: new Date().toISOString(),
+        lastSeen: null,
       });
       return { success: true };
     }
@@ -216,6 +220,7 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
       userId: data.userId,
       isOnline,
       timestamp: new Date().toISOString(),
+      lastSeen: this.onlineUsers.get(data.userId)?.toISOString() || null,
     });
     
     return { success: true };

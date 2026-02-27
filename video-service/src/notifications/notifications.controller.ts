@@ -14,6 +14,7 @@ export class NotificationsController {
     videoId?: string;
     commentId?: string;
     message?: string;
+    senderName?: string;
   }) {
     const notification = await this.notificationsService.createNotification(
       body.recipientId,
@@ -22,6 +23,7 @@ export class NotificationsController {
       body.videoId,
       body.commentId,
       body.message,
+      body.senderName,
     );
     return { success: true, data: notification };
   }

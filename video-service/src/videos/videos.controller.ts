@@ -327,6 +327,10 @@ export class VideosController {
       dto.userId,
       dto.title,
       dto.description,
+      dto.categoryIds,
+      dto.thumbnailTimestamp,
+      dto.visibility,
+      dto.allowComments,
     );
 
     return {
@@ -364,19 +368,25 @@ export class VideosController {
   @Post('chunked-upload/complete')
   @HttpCode(HttpStatus.ACCEPTED)
   async completeChunkedUpload(@Body() dto: CompleteChunkedUploadDto) {
-    const { filePath, fileName, metadata } = await this.chunkedUploadService.completeUpload(dto.uploadId);
+    const { filePath, fileName, fileSize, metadata } = await this.chunkedUploadService.completeUpload(dto.uploadId);
 
-    // Create video record and queue for processing
+    // Create video record and queue for processing — pass all metadata fields
     const video = await this.videosService.uploadVideo(
       {
         userId: metadata.userId,
         title: metadata.title,
         description: metadata.description,
+        categoryIds: metadata.categoryIds,
+        thumbnailTimestamp: metadata.thumbnailTimestamp,
+        visibility: metadata.visibility,
+        allowComments: metadata.allowComments,
       },
       {
         filename: fileName,
         path: filePath,
-        size: 0, // Will be calculated
+        originalname: fileName,
+        size: fileSize,
+        mimetype: this.getMimeTypeFromFileName(fileName),
       } as any,
     );
 
@@ -396,5 +406,22 @@ export class VideosController {
       ...status,
       progress: ((status.uploadedChunks / status.totalChunks) * 100).toFixed(2),
     };
+  }
+
+  /// Detect MIME type from file extension (used for chunked uploads where the
+  /// original file object is not available).
+  private getMimeTypeFromFileName(fileName: string): string {
+    const ext = (fileName.split('.').pop() || '').toLowerCase();
+    const mimeMap: Record<string, string> = {
+      mp4: 'video/mp4',
+      mov: 'video/quicktime',
+      avi: 'video/x-msvideo',
+      webm: 'video/webm',
+      mkv: 'video/x-matroska',
+      '3gp': 'video/3gpp',
+      flv: 'video/x-flv',
+      wmv: 'video/x-ms-wmv',
+    };
+    return mimeMap[ext] || 'video/mp4';
   }
 }

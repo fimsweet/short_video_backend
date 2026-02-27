@@ -29,6 +29,9 @@ export class NotificationsService {
       return null;
     }
 
+    // Auto-resolve senderName from user-service if not provided
+    const resolvedSenderName = senderName || await this.pushNotificationService.getUsernameById(senderId);
+
     // Check if user has this in-app notification type enabled
     const typeKey = this.getNotificationTypeKey(type);
     const isEnabled = await this.pushNotificationService.isNotificationEnabled(
@@ -42,7 +45,7 @@ export class NotificationsService {
       this.sendPushForNotification(
         recipientId,
         type,
-        senderName || 'Người dùng',
+        resolvedSenderName,
         message,
         videoId,
       );
@@ -77,7 +80,7 @@ export class NotificationsService {
     this.sendPushForNotification(
       recipientId,
       type,
-      senderName || 'Người dùng',
+      resolvedSenderName,
       message,
       videoId,
     );

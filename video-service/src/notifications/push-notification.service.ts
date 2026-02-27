@@ -20,6 +20,22 @@ export class PushNotificationService {
   }
 
   /**
+   * Resolve userId → username by calling user-service
+   */
+  async getUsernameById(userId: string): Promise<string> {
+    try {
+      const response = await fetch(`${this.userServiceUrl}/users/id/${userId}`);
+      if (response.ok) {
+        const data = await response.json();
+        return data?.username || 'Người dùng';
+      }
+    } catch (error) {
+      console.error(`[PUSH] Failed to resolve username for userId=${userId}:`, error);
+    }
+    return 'Người dùng';
+  }
+
+  /**
    * Send push notification to a user via user-service
    */
   async sendToUser(payload: PushNotificationPayload): Promise<boolean> {

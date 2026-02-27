@@ -436,7 +436,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     }
     
     console.log(`[OK] Worker Configuration:`);
-    console.log(`   Concurrent Jobs: ${concurrentJobs} (Recommend: 1-2 for K8s)`);
+    console.log(`   Concurrent Jobs: ${concurrentJobs}`);
     console.log(`   Queue: ${this.queueName}`);
     console.log(`   Dead Letter Queue: ${dlqEnabled ? dlqName : 'DISABLED (delete queue to enable)'}`);
     console.log(`   Ready to process videos!`);
@@ -552,7 +552,10 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       const uploadRoot = this.configService.get<string>('UPLOAD_ROOT_PATH') 
         || path.resolve(process.cwd(), '..', 'video-service');
       inputPath = path.join(uploadRoot, filePath);
-      const outputFileName = path.parse(fileName).name;
+      // Sanitize output directory name — remove spaces, parentheses, and special chars
+      // that break FFmpeg's argument parsing (e.g. "Download (19)" → "Download_19")
+      const rawOutputName = path.parse(fileName).name;
+      const outputFileName = rawOutputName.replace(/[^a-zA-Z0-9._-]/g, '_');
       outputDir = path.join(this.processedDir, outputFileName);
 
       // Check if input file exists
@@ -618,7 +621,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       // ============================================
       console.log(`[FFMPEG] Starting FFmpeg conversion + AI analysis in parallel...`);
       
-      const ffmpegPromise = this.convertToHLS(inputPath, outputDir, videoId, originalAspectRatio);
+      const ffmpegPromise = this.convertToHLS(inputPath, outputDir, videoId, originalAspectRatio, videoDuration);
       const aiPromise = this.aiAnalysisService.analyzeVideo(
         inputPath,
         video.title,
@@ -694,12 +697,13 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
         console.warn(`[WARN] Could not delete raw video from S3: ${s3DeleteError.message}`);
       }
 
-      // 8. Cập nhật database với aspect ratio và thumbnail
+      // 8. Cập nhật database với aspect ratio, thumbnail, và duration
       await this.videoRepository.update(videoId, {
         status: VideoStatus.READY,
         hlsUrl: hlsUrl,
         thumbnailUrl: thumbnailUrl,
         aspectRatio: originalAspectRatio,
+        duration: Math.round(videoDuration),
       });
 
       // ============================================
@@ -866,7 +870,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
   // - 480p (SD)   : Mạng trung bình, 4G
   // - 360p (Low)  : Mạng yếu, 3G
   // ============================================
-  private async convertToHLS(inputPath: string, outputDir: string, videoId?: string, originalAspectRatio: string = '16:9'): Promise<void> {
+  private async convertToHLS(inputPath: string, outputDir: string, videoId?: string, originalAspectRatio: string = '16:9', videoDuration: number = 60): Promise<void> {
     console.log(`[VIDEO] [ABR] Starting Adaptive Bitrate encoding...`);
     console.log(`   Original aspect ratio: ${originalAspectRatio}`);
     
@@ -881,7 +885,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     // Process each variant sequentially to avoid memory issues
     for (const variant of variants) {
       console.log(`?? [ABR] Encoding ${variant.name} variant...`);
-      await this.encodeVariant(inputPath, outputDir, variant, videoId);
+      await this.encodeVariant(inputPath, outputDir, variant, videoId, videoDuration);
     }
 
     // Generate master playlist that references all variants
@@ -896,15 +900,51 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     inputPath: string, 
     outputDir: string, 
     variant: { name: string; height: number; bitrate: string; audioBitrate: string },
-    videoId?: string
+    videoId?: string,
+    videoDuration: number = 60
   ): Promise<void> {
+    // ============================================
+    // Dynamic per-variant encoding timeout
+    // ============================================
+    // Formula: max(10 minutes, videoDuration × 5)
+    //   - Short 30s video → 10 min timeout (minimum floor)
+    //   - 3 min video → 15 min timeout
+    //   - 10 min video → 50 min timeout
+    //   - Corrupted/stuck file → will eventually hit timeout
+    // The 5× multiplier gives generous headroom for:
+    //   - AWS Batch EC2 instances (often burstable t3/c5)
+    //   - CPU throttling under sustained load
+    //   - Slow disk I/O on EBS volumes
+    //   - Encoding overhead with H.264 HLS + 3 variants
+    // On a modern CPU with -preset fast, real encoding is
+    // typically 0.5-2× video duration per variant.
+    // ============================================
+    const MIN_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes floor
+    const ENCODE_TIMEOUT_MS = Math.max(MIN_TIMEOUT_MS, videoDuration * 5 * 1000);
+    const timeoutMinutes = (ENCODE_TIMEOUT_MS / 60000).toFixed(1);
+
     return new Promise((resolve, reject) => {
       const variantDir = path.join(outputDir, variant.name);
+      let settled = false;
       
       // Create variant subdirectory
       if (!fs.existsSync(variantDir)) {
         fs.mkdirSync(variantDir, { recursive: true });
       }
+
+      // Safety timeout — kill FFmpeg if it takes too long
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        console.error(`[FFmpeg ${variant.name}] [TIMEOUT] Encoding exceeded ${timeoutMinutes} minute limit — killing process`);
+        try {
+          command.kill('SIGKILL');
+        } catch (e) { /* already dead */ }
+        if (videoId) {
+          this.activeFFmpegProcesses.delete(`${videoId}_${variant.name}`);
+        }
+        reject(new Error(`FFmpeg ${variant.name} encoding timed out after ${timeoutMinutes} minutes (video: ${videoDuration.toFixed(0)}s)`));
+      }, ENCODE_TIMEOUT_MS);
 
       const command = ffmpeg(inputPath)
         .outputOptions([
@@ -943,7 +983,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
           '-hls_playlist_type vod',
           '-hls_flags independent_segments',  // Each segment can be decoded independently
           '-hls_segment_type mpegts',
-          `-hls_segment_filename ${variantDir}/segment%03d.ts`,
+          `-hls_segment_filename`, `${variantDir}/segment%03d.ts`,
         ])
         .output(`${variantDir}/playlist.m3u8`)
         .on('start', (commandLine) => {
@@ -959,6 +999,9 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
           }
         })
         .on('end', () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
           console.log(`[FFmpeg ${variant.name}] [OK] Completed`);
           if (videoId) {
             this.activeFFmpegProcesses.delete(`${videoId}_${variant.name}`);
@@ -966,6 +1009,9 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
           resolve();
         })
         .on('error', (err) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
           console.error(`[FFmpeg ${variant.name}] [ERROR] Error:`, err.message);
           if (videoId) {
             this.activeFFmpegProcesses.delete(`${videoId}_${variant.name}`);

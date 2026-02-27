@@ -254,19 +254,37 @@ export class VideosService {
       // ============================================
       // Create queue with DLQ support (must match worker config)
       // ============================================
+      // On fresh RabbitMQ: creates DLQ + main queue with DLQ args → OK
+      // On existing deployment (queue without DLQ): assertQueue throws
+      //   PRECONDITION_FAILED → fallback to simple queue
+      // ============================================
       const dlqName = `${this.queueName}_dlq`;
       
-      // Create DLQ first
-      await channel.assertQueue(dlqName, { durable: true });
-      
-      // Create main queue with DLQ routing
-      await channel.assertQueue(this.queueName, { 
-        durable: true,
-        arguments: {
-          'x-dead-letter-exchange': '',
-          'x-dead-letter-routing-key': dlqName,
-        }
-      });
+      try {
+        // Create DLQ first
+        await channel.assertQueue(dlqName, { durable: true });
+        
+        // Create main queue with DLQ routing
+        await channel.assertQueue(this.queueName, { 
+          durable: true,
+          arguments: {
+            'x-dead-letter-exchange': '',
+            'x-dead-letter-routing-key': dlqName,
+          }
+        });
+      } catch (assertError) {
+        // Queue exists with different args (no DLQ) — fallback
+        console.warn(`[WARN] Could not create queue with DLQ (queue exists with different args)`);
+        console.warn(`   To enable DLQ: Delete queue "${this.queueName}" in RabbitMQ and restart`);
+        
+        // Channel is destroyed after PRECONDITION_FAILED — reconnect
+        try { await channel.close().catch(() => {}); } catch (e) { /* ignore */ }
+        try { await connection.close().catch(() => {}); } catch (e) { /* ignore */ }
+        
+        connection = await amqp.connect(this.rabbitMQUrl);
+        channel = await connection.createChannel();
+        await channel.assertQueue(this.queueName, { durable: true });
+      }
 
       // Gửi message
       channel.sendToQueue(
@@ -1056,11 +1074,17 @@ export class VideosService {
       let processedFolderName = videoId; // Default to videoId
 
       if (video.hlsUrl) {
-        // hlsUrl format: /uploads/processed_videos/{folder-id}/playlist.m3u8
-        const match = video.hlsUrl.match(/\/processed_videos\/([^\/]+)\//);
-        if (match && match[1]) {
-          processedFolderName = match[1];
-          console.log(`[PATH] Extracted folder name from hlsUrl: ${processedFolderName}`);
+        // hlsUrl formats:
+        //   Local: /uploads/processed_videos/{folder-id}/master.m3u8
+        //   S3/CloudFront: https://xxx.cloudfront.net/videos/{videoId}/master.m3u8
+        const localMatch = video.hlsUrl.match(/\/processed_videos\/([^\/]+)\//);
+        const s3Match = video.hlsUrl.match(/\/videos\/([^\/]+)\//);
+        if (localMatch && localMatch[1]) {
+          processedFolderName = localMatch[1];
+          console.log(`[PATH] Extracted folder name from hlsUrl (local): ${processedFolderName}`);
+        } else if (s3Match && s3Match[1]) {
+          processedFolderName = s3Match[1];
+          console.log(`[PATH] Extracted folder name from hlsUrl (S3): ${processedFolderName}`);
         }
       } else if (video.thumbnailUrl) {
         // thumbnailUrl format: /uploads/processed_videos/{folder-id}/thumbnail.jpg
@@ -1073,35 +1097,39 @@ export class VideosService {
 
       console.log(`[CHECK] Will delete processed videos folder: ${processedFolderName}`);
 
-      // Use path relative to video-service directory
-      const processedVideoPath = path.resolve(__dirname, '..', '..', '..', 'video-worker-service', 'processed_videos', processedFolderName);
+      // ============================================
+      // Delete processed video files (local)
+      // ============================================
+      // Try multiple paths to support all environments:
+      //   1. Docker: /app/uploads/processed_videos/{folder}
+      //   2. Local dev: ../../video-worker-service/processed_videos/{folder}
+      //   3. Alternative: ../video-worker-service/processed_videos/{folder}
+      // ============================================
+      const candidatePaths = [
+        // Docker path (shared volume at /app/uploads/processed_videos/)
+        path.resolve(process.cwd(), 'uploads', 'processed_videos', processedFolderName),
+        // Local dev path (from dist/ directory)
+        path.resolve(__dirname, '..', '..', '..', 'video-worker-service', 'processed_videos', processedFolderName),
+        // Alternative local dev path (from CWD)
+        path.resolve(process.cwd(), '..', 'video-worker-service', 'processed_videos', processedFolderName),
+      ];
 
-      console.log(`[CHECK] Looking for processed videos at: ${processedVideoPath}`);
-      console.log(`?? __dirname is: ${__dirname}`);
-
-      if (fs.existsSync(processedVideoPath)) {
-        try {
-          fs.rmSync(processedVideoPath, { recursive: true, force: true });
-          console.log(`[OK] Deleted processed video files at: ${processedVideoPath}`);
-        } catch (error) {
-          console.error(`[ERROR] Error deleting processed video folder: ${error}`);
-        }
-      } else {
-        console.log(`[WARN] Processed video folder not found at: ${processedVideoPath}`);
-        // Try alternative path (in case service is running in different directory)
-        const alternativePath = path.resolve(process.cwd(), '..', 'video-worker-service', 'processed_videos', processedFolderName);
-        console.log(`[CHECK] Trying alternative path: ${alternativePath}`);
-
-        if (fs.existsSync(alternativePath)) {
+      let deletedLocal = false;
+      for (const candidatePath of candidatePaths) {
+        if (fs.existsSync(candidatePath)) {
           try {
-            fs.rmSync(alternativePath, { recursive: true, force: true });
-            console.log(`[OK] Deleted processed video files at: ${alternativePath}`);
+            fs.rmSync(candidatePath, { recursive: true, force: true });
+            console.log(`[OK] Deleted processed video files at: ${candidatePath}`);
+            deletedLocal = true;
+            break;
           } catch (error) {
             console.error(`[ERROR] Error deleting processed video folder: ${error}`);
           }
-        } else {
-          console.log(`[WARN] Processed video folder not found at alternative path either`);
         }
+      }
+
+      if (!deletedLocal) {
+        console.log(`[WARN] Processed video folder not found locally (may be S3-only)`);
       }
 
       // 3. Delete raw video file if exists
@@ -1139,8 +1167,15 @@ export class VideosService {
           }
 
           // Delete processed video folder from S3
-          await this.storageService.deleteDirectory(`processed_videos/${processedFolderName}/`);
-          console.log(`[S3] Deleted processed videos from S3: processed_videos/${processedFolderName}/`);
+          // Worker uploads to S3 under "videos/{videoId}/" prefix
+          // Try both prefixes to handle legacy and current uploads
+          await this.storageService.deleteDirectory(`videos/${videoId}/`);
+          console.log(`[S3] Deleted processed videos from S3: videos/${videoId}/`);
+          
+          // Also try legacy prefix in case older videos used it
+          try {
+            await this.storageService.deleteDirectory(`processed_videos/${processedFolderName}/`);
+          } catch (e) { /* ignore — may not exist */ }
 
           // Delete custom thumbnail from S3
           if (video.thumbnailUrl && video.thumbnailUrl.includes('/thumbnails/')) {

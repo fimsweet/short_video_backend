@@ -13,6 +13,10 @@ interface ChunkedUpload {
   userId: string;
   title: string;
   description?: string;
+  categoryIds?: number[];
+  thumbnailTimestamp?: number;
+  visibility?: string;
+  allowComments?: boolean;
   createdAt: Date;
   tempDir: string;
 }
@@ -34,7 +38,11 @@ export class ChunkedUploadService {
     setInterval(() => this.cleanupStaleUploads(), this.cleanupInterval);
   }
 
-  initUpload(fileName: string, fileSize: number, totalChunks: number, userId: string, title: string, description?: string): string {
+  initUpload(
+    fileName: string, fileSize: number, totalChunks: number, userId: string, title: string,
+    description?: string, categoryIds?: number[], thumbnailTimestamp?: number,
+    visibility?: string, allowComments?: boolean,
+  ): string {
     const uploadId = uuidv4();
     const tempUploadDir = path.join(this.tempDir, uploadId);
 
@@ -51,6 +59,10 @@ export class ChunkedUploadService {
       userId,
       title,
       description,
+      categoryIds,
+      thumbnailTimestamp,
+      visibility,
+      allowComments,
       createdAt: new Date(),
       tempDir: tempUploadDir,
     });
@@ -66,6 +78,13 @@ export class ChunkedUploadService {
     const upload = this.uploads.get(uploadId);
     if (!upload) {
       throw new NotFoundException('Upload session not found');
+    }
+
+    // Validate chunk index bounds
+    if (chunkIndex < 0 || chunkIndex >= upload.totalChunks) {
+      throw new BadRequestException(
+        `Invalid chunk index ${chunkIndex}. Must be between 0 and ${upload.totalChunks - 1}`,
+      );
     }
 
     const chunkPath = path.join(upload.tempDir, `chunk_${chunkIndex}`);
@@ -86,7 +105,7 @@ export class ChunkedUploadService {
     }
   }
 
-  async completeUpload(uploadId: string): Promise<{ filePath: string; fileName: string; metadata: any }> {
+  async completeUpload(uploadId: string): Promise<{ filePath: string; fileName: string; fileSize: number; metadata: any }> {
     const upload = this.uploads.get(uploadId);
     if (!upload) {
       throw new NotFoundException('Upload session not found');
@@ -102,16 +121,25 @@ export class ChunkedUploadService {
     console.log(`[MERGE] Merging ${upload.totalChunks} chunks for ${uploadId}...`);
 
     const finalFileName = `${uuidv4()}_${upload.fileName}`;
-    const finalPath = path.join('./uploads/raw_videos', finalFileName);
+    const rawVideosDir = './uploads/raw_videos';
+    // Ensure directory exists (critical for fresh deployments with bind mounts)
+    if (!fs.existsSync(rawVideosDir)) {
+      fs.mkdirSync(rawVideosDir, { recursive: true });
+    }
+    const finalPath = path.join(rawVideosDir, finalFileName);
 
     try {
-      // Merge all chunks in order
+      // Merge all chunks in order using pipeline for proper backpressure
       const writeStream = fs.createWriteStream(finalPath);
 
       for (let i = 0; i < upload.totalChunks; i++) {
         const chunkPath = path.join(upload.tempDir, `chunk_${i}`);
         const chunkBuffer = await fs.promises.readFile(chunkPath);
-        writeStream.write(chunkBuffer);
+        const canContinue = writeStream.write(chunkBuffer);
+        if (!canContinue) {
+          // Wait for drain event before writing more (backpressure)
+          await new Promise<void>((resolve) => writeStream.once('drain', resolve));
+        }
       }
 
       await new Promise((resolve, reject) => {
@@ -128,10 +156,15 @@ export class ChunkedUploadService {
       return {
         filePath: `uploads/raw_videos/${finalFileName}`,
         fileName: finalFileName,
+        fileSize: stats.size,
         metadata: {
           userId: upload.userId,
           title: upload.title,
           description: upload.description,
+          categoryIds: upload.categoryIds,
+          thumbnailTimestamp: upload.thumbnailTimestamp,
+          visibility: upload.visibility,
+          allowComments: upload.allowComments,
         },
       };
     } catch (error) {
