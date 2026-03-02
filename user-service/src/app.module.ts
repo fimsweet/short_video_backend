@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ConfigModule } from '@nestjs/config'; // Thêm import này
+import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -18,22 +18,22 @@ import { ReportsModule } from './reports/reports.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ // Thêm cấu hình này
-      isGlobal: true, // Giúp ConfigModule có sẵn ở mọi nơi
+    ConfigModule.forRoot({
+      isGlobal: true,
       envFilePath: '.env',
     }),
     TypeOrmModule.forRoot(databaseConfig),
-    RedisCacheModule, // ✅ Redis cache global
-    EmailModule, // ✅ Email service (Nodemailer)
-    HealthModule, // ✅ Health check endpoints
+    RedisCacheModule, // Redis cache global
+    EmailModule, // Email service (Nodemailer)
+    HealthModule, // Health check endpoints
     AuthModule,
     UsersModule,
     FollowsModule,
-    UserInterestsModule, // ✅ User interests for recommendations
-    ActivityHistoryModule, // ✅ Activity history tracking
-    SessionsModule, // ✅ Device sessions management
-    PushModule, // ✅ Push notifications endpoint
-    ReportsModule, // ✅ User reports
+    UserInterestsModule, // User interests for recommendations
+    ActivityHistoryModule, // Activity history tracking
+    SessionsModule, // Device sessions management
+    PushModule, // Push notifications endpoint
+    ReportsModule, // User reports
   ],
   controllers: [AppController],
   providers: [AppService],

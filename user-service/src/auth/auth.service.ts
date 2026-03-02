@@ -373,10 +373,10 @@ export class AuthService {
   }
 
   async login(usernameOrEmail: string, password: string) {
-    // Tìm user bằng username hoặc email
+    // Find user by username or email
     let user = await this.usersService.findOne(usernameOrEmail);
 
-    // Nếu không tìm thấy bằng username, thử tìm bằng email
+    // If not found by username, try finding by email
     if (!user) {
       user = await this.usersService.findByEmail(usernameOrEmail);
     }

@@ -97,7 +97,7 @@ export class HealthController {
       service: 'video-service',
       timestamp: new Date().toISOString(),
       services: {
-        redis: redisStatus.success ? '✅ Running' : '❌ Down',
+        redis: redisStatus.success ? 'Running' : 'Down',
       },
       details: {
         redis: redisStatus,

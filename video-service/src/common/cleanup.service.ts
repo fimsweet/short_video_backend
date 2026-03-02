@@ -5,37 +5,37 @@ import * as path from 'path';
 
 /**
  * ============================================
- * 🧹 CLEANUP SERVICE
+ * CLEANUP SERVICE
  * ============================================
- * Giải quyết vấn đề: File rác tích tụ khi upload/processing lỗi
+ * Handles stale file accumulation from failed uploads/processing
  * 
- * Các thư mục được dọn dẹp:
- * - ./uploads/temp: File chunk tạm khi upload
- * - ./uploads/raw_videos: Video gốc chờ xử lý (nếu worker chưa kịp xóa)
- * - ./uploads/chunks: Chunk files tạm
+ * Directories cleaned:
+ * - ./uploads/temp: Temporary chunk files during upload
+ * - ./uploads/raw_videos: Raw videos pending processing (if not yet deleted by worker)
+ * - ./uploads/chunks: Temporary chunk files
  * 
- * QUAN TRỌNG: KHÔNG xóa ./uploads/thumbnails vì chứa custom thumbnails người dùng upload
+ * NOTE: ./uploads/thumbnails is NOT cleaned (contains user-uploaded custom thumbnails)
  * 
- * Schedule: Chạy mỗi ngày lúc 3:00 AM
- * Rule: Xóa file cũ hơn 24 giờ
+ * Schedule: Runs daily at 3:00 AM
+ * Rule: Deletes files older than 24 hours
  * ============================================
  */
 @Injectable()
 export class CleanupService implements OnModuleInit {
   private readonly logger = new Logger(CleanupService.name);
   
-  // Các thư mục cần dọn dẹp (KHÔNG bao gồm thumbnails - chứa custom thumbnails)
+  // Directories to clean (excludes thumbnails - contains user custom thumbnails)
   private readonly tempDirs = [
     './uploads/temp',
     './uploads/raw_videos', 
     './uploads/chunks',
   ];
 
-  // Thời gian giữ file (24 giờ)
+  // Maximum file age before deletion (24 hours)
   private readonly MAX_FILE_AGE_MS = 24 * 60 * 60 * 1000;
 
   onModuleInit() {
-    this.logger.log('🧹 Cleanup Service initialized');
+    this.logger.log('Cleanup Service initialized');
     this.logger.log(`   Monitoring directories: ${this.tempDirs.join(', ')}`);
     this.logger.log(`   Max file age: 24 hours`);
     this.logger.log(`   Schedule: Daily at 3:00 AM`);
@@ -45,22 +45,20 @@ export class CleanupService implements OnModuleInit {
   }
 
   /**
-   * Chạy mỗi ngày lúc 3:00 AM
-   * Thời điểm ít traffic nhất, phù hợp để chạy maintenance tasks
+   * Runs daily at 3:00 AM - lowest traffic period for maintenance tasks
    */
   @Cron(CronExpression.EVERY_DAY_AT_3AM)
   handleScheduledCleanup() {
-    this.logger.log('🧹 Starting scheduled cleanup (3:00 AM daily job)...');
+    this.logger.log('Starting scheduled cleanup (3:00 AM daily job)...');
     this.runCleanup();
   }
 
   /**
-   * Chạy mỗi 6 giờ để đảm bảo không tích tụ quá nhiều file
-   * Đây là backup cho trường hợp server restart sau 3AM
+   * Runs every 6 hours as backup in case server restarts after 3AM
    */
   @Cron(CronExpression.EVERY_6_HOURS)
   handlePeriodicCleanup() {
-    this.logger.log('🧹 Starting periodic cleanup (every 6 hours)...');
+    this.logger.log('Starting periodic cleanup (every 6 hours)...');
     this.runCleanup();
   }
 
@@ -88,9 +86,9 @@ export class CleanupService implements OnModuleInit {
 
     if (totalDeleted > 0) {
       const sizeInMB = (totalSize / (1024 * 1024)).toFixed(2);
-      this.logger.log(`✅ Cleanup completed: Deleted ${totalDeleted} files (${sizeInMB} MB freed)`);
+      this.logger.log(`Cleanup completed: Deleted ${totalDeleted} files (${sizeInMB} MB freed)`);
     } else {
-      this.logger.log('✅ Cleanup completed: No old files found');
+      this.logger.log('Cleanup completed: No old files found');
     }
   }
 
@@ -150,7 +148,7 @@ export class CleanupService implements OnModuleInit {
    * Manual cleanup trigger (for admin API)
    */
   async triggerManualCleanup(): Promise<{ deletedCount: number; deletedSize: number }> {
-    this.logger.log('🧹 Manual cleanup triggered...');
+    this.logger.log('Manual cleanup triggered...');
     
     const cutoffTime = Date.now() - this.MAX_FILE_AGE_MS;
     let totalDeleted = 0;

@@ -84,7 +84,7 @@ export class StorageService implements OnModuleInit {
           Key: s3Key,
           Body: fileStream,
           ContentType: contentType || this.getContentType(filePath),
-          CacheControl: this.getCacheControl(filePath), // ?? HLS Caching
+          CacheControl: this.getCacheControl(filePath), // HLS caching strategy
         },
         queueSize: 4,
         partSize: 5 * 1024 * 1024,
@@ -104,7 +104,7 @@ export class StorageService implements OnModuleInit {
           Key: s3Key,
           Body: fileBuffer,
           ContentType: contentType || this.getContentType(filePath),
-          CacheControl: this.getCacheControl(filePath), // ?? HLS Caching
+          CacheControl: this.getCacheControl(filePath), // HLS caching strategy
         }),
       );
     }
@@ -122,11 +122,11 @@ export class StorageService implements OnModuleInit {
   /**
    * Upload entire processed video directory to S3
    * ============================================
-   * ?? OPTIMIZED: Parallel Upload for ABR
+   * OPTIMIZED: Parallel Upload for ABR
    * ============================================
    * - Supports ABR subdirectories (720p/, 480p/, 360p/)
    * - Uses Promise.all for parallel uploads
-   * - Reduces upload time from 30s ? 5s for typical videos
+   * - Reduces upload time from 30s to 5s for typical videos
    * ============================================
    */
   async uploadProcessedVideo(
@@ -350,7 +350,7 @@ export class StorageService implements OnModuleInit {
 
   /**
    * ============================================
-   * ?? HLS CACHING: Get Cache-Control header
+   * HLS CACHING: Get Cache-Control header
    * ============================================
    * CloudFront/Browser caching strategy:
    * - .ts segments: Cache for 1 year (immutable, never change)

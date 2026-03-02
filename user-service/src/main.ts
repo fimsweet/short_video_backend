@@ -15,7 +15,7 @@ async function bootstrap() {
     next();
   });
   
-  // Serve static files với CORS headers
+  // Serve static files with CORS headers
   const uploadsPath = join(__dirname, '..', 'uploads');
   console.log('Serving static files from:', uploadsPath);
   
@@ -26,9 +26,9 @@ async function bootstrap() {
     next();
   }, express.static(uploadsPath));
   
-  // Enable CORS cho Flutter app
+  // Enable CORS for Flutter app
   app.enableCors({
-    origin: true, // Cho phép tất cả origin trong development
+    origin: true, // Allow all origins in development
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],

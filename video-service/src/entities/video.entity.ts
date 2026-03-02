@@ -16,7 +16,7 @@ export enum VideoVisibility {
 }
 
 // ============================================
-// 📊 DATABASE INDEXES FOR PERFORMANCE
+// DATABASE INDEXES FOR PERFORMANCE
 // ============================================
 // These indexes optimize common queries:
 // - Feed: Get READY videos sorted by createdAt
@@ -34,7 +34,7 @@ export class Video {
   id: string;
 
   @Column()
-  userId: string; // ID của user upload video
+  userId: string; // User ID who uploaded the video
 
   @Column()
   title: string;
@@ -46,28 +46,28 @@ export class Video {
   originalFileName: string;
 
   @Column()
-  rawVideoPath: string; // Đường dẫn file gốc
+  rawVideoPath: string; // Path to the original uploaded file
 
   @Column({ nullable: true })
-  hlsUrl: string; // URL đến playlist.m3u8
+  hlsUrl: string; // URL to HLS playlist.m3u8
 
   @Column({ nullable: true })
   thumbnailUrl: string;
 
   @Column({ type: 'int', nullable: true })
-  duration: number; // Thời lượng video (giây)
+  duration: number; // Video duration in seconds
 
   @Column({ type: 'bigint', nullable: true })
-  fileSize: number; // Kích thước file (bytes)
+  fileSize: number; // File size in bytes
 
   @Column({ nullable: true })
   aspectRatio: string; // e.g., "9:16" for TikTok-style videos
 
   @Column({ type: 'int', default: 0 })
-  viewCount: number; // Số lượt xem video
+  viewCount: number; // Total view count
 
   @Column({ type: 'boolean', default: false })
-  isHidden: boolean; // Ẩn video khỏi feed công khai
+  isHidden: boolean; // Hidden from public feed
 
   // Privacy settings for individual video
   @Column({
@@ -75,13 +75,13 @@ export class Video {
     enum: VideoVisibility,
     default: VideoVisibility.PUBLIC,
   })
-  visibility: VideoVisibility; // Ai có thể xem video này
+  visibility: VideoVisibility; // Who can view this video
 
   @Column({ type: 'boolean', default: true })
-  allowComments: boolean; // Cho phép bình luận
+  allowComments: boolean; // Allow comments on this video
 
   @Column({ type: 'boolean', default: true })
-  allowDuet: boolean; // Cho phép sử dụng lại nội dung (Duet, Ghép nối...)
+  allowDuet: boolean; // Allow content reuse (Duet, Stitch...)
 
   @Column({
     type: 'enum',
@@ -91,7 +91,7 @@ export class Video {
   status: VideoStatus;
 
   @Column({ nullable: true })
-  errorMessage: string; // Lưu lỗi nếu processing fail
+  errorMessage: string; // Stores error message if processing fails
 
   @CreateDateColumn()
   createdAt: Date;

@@ -3,9 +3,9 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { CleanupService } from './cleanup.service';
 
 /**
- * Module quản lý các tác vụ dọn dẹp tự động
- * - Xóa file tạm cũ hơn 24h
- * - Chạy theo schedule (3AM daily + every 6 hours)
+ * Module for managing automated cleanup tasks
+ * - Deletes temporary files older than 24 hours
+ * - Runs on schedule (3AM daily + every 6 hours)
  */
 @Module({
   imports: [

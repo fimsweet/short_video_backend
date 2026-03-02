@@ -2,7 +2,7 @@
 import * as path from 'path';
 
 // ============================================
-// 🔒 MAGIC NUMBER VALIDATION
+// MAGIC NUMBER VALIDATION
 // ============================================
 // This utility validates files by reading their actual binary content
 // (magic numbers / file signatures) instead of trusting file extensions

@@ -146,7 +146,7 @@ export class VideosService {
       // ============================================
       await this.syncRawVideoToS3(file.path, file.filename);
 
-      // 4. Gửi message vào RabbitMQ để worker xử lý
+      // 4. Send processing job to RabbitMQ queue
       await this.sendToQueue({
         videoId: savedVideo.id,
         filePath: file.path,
@@ -247,7 +247,7 @@ export class VideosService {
     let channel: amqp.Channel;
 
     try {
-      // Kết nối tới RabbitMQ
+      // Connect to RabbitMQ
       connection = await amqp.connect(this.rabbitMQUrl);
       channel = await connection.createChannel();
 
@@ -365,7 +365,7 @@ export class VideosService {
     const saveCount = await this.savedVideosService.getSaveCount(id);
     const shareCount = await this.sharesService.getShareCount(id);
 
-    console.log(`?? getVideoById(${id}):`);
+    console.log(`[DEBUG] getVideoById(${id}):`);
     console.log(`   likeCount: ${likeCount}`);
     console.log(`   commentCount: ${commentCount}`);
     console.log(`   saveCount: ${saveCount}`);

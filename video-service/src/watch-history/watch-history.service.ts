@@ -23,8 +23,8 @@ export class WatchHistoryService {
   ) {}
 
   /**
-   * Ghi nhận hoặc cập nhật lịch sử xem video
-   * Được gọi khi user xem video hoặc rời khỏi video
+   * Record or update video watch history
+   * Called when user watches or leaves a video
    */
   async recordWatch(
     userId: string,
@@ -32,19 +32,19 @@ export class WatchHistoryService {
     watchDuration: number,
     videoDuration: number,
   ): Promise<WatchHistory> {
-    // Tính % đã xem
+    // Calculate watch percentage
     const watchPercentage = videoDuration > 0 
       ? Math.min((watchDuration / videoDuration) * 100, 100) 
       : 0;
     const isCompleted = watchPercentage >= 90;
 
-    // Tìm xem đã có history chưa
+    // Check if watch history already exists
     let history = await this.watchHistoryRepository.findOne({
       where: { userId, videoId },
     });
 
     if (history) {
-      // Cập nhật: giữ lại max watch duration
+      // Update: keep max watch duration
       history.watchDuration = Math.max(history.watchDuration, watchDuration);
       history.videoDuration = videoDuration;
       history.watchPercentage = Math.max(history.watchPercentage, watchPercentage);
@@ -52,7 +52,7 @@ export class WatchHistoryService {
       history.isCompleted = history.isCompleted || isCompleted;
       history.lastWatchedAt = new Date();
     } else {
-      // Tạo mới
+      // Create new entry
       history = this.watchHistoryRepository.create({
         userId,
         videoId,
@@ -71,7 +71,7 @@ export class WatchHistoryService {
   }
 
   /**
-   * Lấy lịch sử xem của user
+   * Get watch history for a user
    */
   async getUserWatchHistory(
     userId: string,
@@ -89,7 +89,7 @@ export class WatchHistoryService {
   }
 
   /**
-   * Xoá một video khỏi lịch sử xem
+   * Remove a single video from watch history
    */
   async removeFromHistory(userId: string, videoId: string): Promise<boolean> {
     const result = await this.watchHistoryRepository.delete({ userId, videoId });
@@ -97,7 +97,7 @@ export class WatchHistoryService {
   }
 
   /**
-   * Xoá toàn bộ lịch sử xem
+   * Clear all watch history for a user
    */
   async clearHistory(userId: string): Promise<number> {
     const result = await this.watchHistoryRepository.delete({ userId });
@@ -105,18 +105,18 @@ export class WatchHistoryService {
   }
 
   /**
-   * Tính toán implicit interests từ watch time
-   * Đây là hàm quan trọng nhất cho recommendation
+   * Calculate implicit interests from watch time data
+   * Core function for the recommendation engine
    * 
    * Logic:
-   * - Chỉ tính những video xem >30% hoặc >10 giây (để loại bỏ skip nhanh)
-   * - Weight = tổng thời gian xem của category / max thời gian xem
-   * - Xem lại nhiều lần = boost weight
+   * - Only considers videos watched >30% or >10 seconds (filters out quick skips)
+   * - Weight = total watch time per category / max watch time (normalized)
+   * - Rewatches boost the weight
    */
   async getWatchTimeBasedInterests(userId: string): Promise<WatchBasedInterest[]> {
     console.log(`[STATS] Calculating watch-time interests for user ${userId}...`);
 
-    // Lấy 30 ngày gần nhất, chỉ những video xem ý nghĩa (>30% hoặc >10s)
+    // Last 30 days, only meaningful watches (>30% or >10s)
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
@@ -126,7 +126,7 @@ export class WatchHistoryService {
       .andWhere('wh.lastWatchedAt > :date', { date: thirtyDaysAgo })
       .andWhere('(wh.watchPercentage >= 30 OR wh.watchDuration >= 10)')
       .orderBy('wh.lastWatchedAt', 'DESC')
-      .take(100) // Giới hạn 100 video gần nhất
+      .take(100) // Limit to most recent 100 videos
       .getMany();
 
     if (watchHistory.length === 0) {
@@ -134,11 +134,11 @@ export class WatchHistoryService {
       return [];
     }
 
-    // Lấy categories của các video đã xem
+    // Fetch categories for watched videos
     const videoIds = watchHistory.map(wh => wh.videoId);
     const videoCategories = await this.categoriesService.getVideoCategoriesBulk(videoIds);
 
-    // Tính tổng watch time theo category
+    // Aggregate total watch time per category
     const categoryStats: Map<number, {
       categoryName: string;
       totalWatchTime: number;
@@ -159,8 +159,8 @@ export class WatchHistoryService {
           rewatchCount: 0,
         };
 
-        // Tính điểm watch time có trọng số
-        // Video xem hoàn thành = 1.5x, rewatch = 1.2x mỗi lần
+        // Weighted watch time scoring
+        // Completed video = 1.5x, each rewatch = +0.2x (capped at 5 rewatches)
         let effectiveWatchTime = wh.watchDuration;
         if (wh.isCompleted) effectiveWatchTime *= 1.5;
         if (wh.watchCount > 1) effectiveWatchTime *= (1 + 0.2 * Math.min(wh.watchCount - 1, 5));
@@ -174,13 +174,13 @@ export class WatchHistoryService {
       }
     }
 
-    // Chuyển đổi thành interests với weight chuẩn hoá
+    // Convert to interests with normalized weights
     const maxWatchTime = Math.max(...Array.from(categoryStats.values()).map(s => s.totalWatchTime));
     
     const interests: WatchBasedInterest[] = [];
     categoryStats.forEach((stats, categoryId) => {
       // Weight = normalized watch time (0-1)
-      // Boost thêm nếu có nhiều video hoàn thành hoặc xem lại
+      // Boost weight for high completion and rewatch rates
       let weight = stats.totalWatchTime / maxWatchTime;
       
       // Boost for completion rate
@@ -196,7 +196,7 @@ export class WatchHistoryService {
       });
     });
 
-    // Sắp xếp theo weight giảm dần
+    // Sort by weight descending
     interests.sort((a, b) => b.weight - a.weight);
 
     console.log(`   Found ${interests.length} category interests based on watch time`);
@@ -206,7 +206,7 @@ export class WatchHistoryService {
   }
 
   /**
-   * Kiểm tra user đã xem video này chưa
+   * Check if a user has watched a specific video
    */
   async hasWatched(userId: string, videoId: string): Promise<boolean> {
     const count = await this.watchHistoryRepository.count({
@@ -216,7 +216,7 @@ export class WatchHistoryService {
   }
 
   /**
-   * Lấy danh sách video user đã xem (để lọc khỏi recommendation)
+   * Get list of watched video IDs (used to exclude from recommendations)
    */
   async getWatchedVideoIds(userId: string, limit: number = 100): Promise<string[]> {
     const history = await this.watchHistoryRepository.find({
@@ -230,7 +230,7 @@ export class WatchHistoryService {
   }
 
   /**
-   * Thống kê watch time của user
+   * Get aggregated watch statistics for a user
    */
   async getUserWatchStats(userId: string): Promise<{
     totalWatchTime: number;

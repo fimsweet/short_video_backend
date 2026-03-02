@@ -23,19 +23,19 @@ export class WatchHistory {
   videoId: string;
 
   @Column({ type: 'int', default: 0 })
-  watchDuration: number; // Thời gian xem (giây)
+  watchDuration: number; // Watch duration in seconds
 
   @Column({ type: 'int', default: 0 })
-  videoDuration: number; // Tổng thời lượng video (giây)
+  videoDuration: number; // Total video duration in seconds
 
   @Column({ type: 'float', default: 0 })
-  watchPercentage: number; // % video đã xem (0-100)
+  watchPercentage: number; // Percentage of video watched (0-100)
 
   @Column({ type: 'int', default: 1 })
-  watchCount: number; // Số lần xem lại video này
+  watchCount: number; // Number of times this video was rewatched
 
   @Column({ type: 'boolean', default: false })
-  isCompleted: boolean; // Đã xem hết video chưa (>90%)
+  isCompleted: boolean; // Whether video was fully watched (>90%)
 
   @CreateDateColumn()
   watchedAt: Date;

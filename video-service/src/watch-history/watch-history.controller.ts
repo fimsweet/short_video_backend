@@ -13,8 +13,8 @@ import { WatchHistoryService } from './watch-history.service';
 class RecordWatchDto {
   userId: string;
   videoId: string;
-  watchDuration: number; // giây
-  videoDuration: number; // giây
+  watchDuration: number; // seconds
+  videoDuration: number; // seconds
 }
 
 @Controller('watch-history')
@@ -22,7 +22,7 @@ export class WatchHistoryController {
   constructor(private readonly watchHistoryService: WatchHistoryService) {}
 
   /**
-   * Ghi nhận thời gian xem video
+   * Record video watch time
    * POST /watch-history
    */
   @Post()
@@ -47,7 +47,7 @@ export class WatchHistoryController {
   }
 
   /**
-   * Lấy lịch sử xem của user
+   * Get watch history for a user
    * GET /watch-history/:userId
    */
   @Get(':userId')
@@ -70,7 +70,7 @@ export class WatchHistoryController {
   }
 
   /**
-   * Lấy interests dựa trên watch time
+   * Get interests based on watch time
    * GET /watch-history/:userId/interests
    */
   @Get(':userId/interests')
@@ -84,7 +84,7 @@ export class WatchHistoryController {
   }
 
   /**
-   * Lấy thống kê xem của user
+   * Get watch statistics for a user
    * GET /watch-history/:userId/stats
    */
   @Get(':userId/stats')
@@ -98,7 +98,7 @@ export class WatchHistoryController {
   }
 
   /**
-   * Xoá một video khỏi lịch sử
+   * Remove a single video from history
    * DELETE /watch-history/:userId/:videoId
    */
   @Delete(':userId/:videoId')
@@ -115,7 +115,7 @@ export class WatchHistoryController {
   }
 
   /**
-   * Xoá toàn bộ lịch sử
+   * Clear all watch history
    * DELETE /watch-history/:userId
    */
   @Delete(':userId')

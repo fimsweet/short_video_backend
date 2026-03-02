@@ -28,7 +28,7 @@ export class VideosController {
   ) { }
 
   @Post('upload')
-  @HttpCode(HttpStatus.ACCEPTED) // 202 - giống POC
+  @HttpCode(HttpStatus.ACCEPTED) // 202 - async processing
   @UseInterceptors(FileInterceptor('video', multerConfig))
   async uploadVideo(
     @UploadedFile() file: Express.Multer.File,
@@ -102,7 +102,7 @@ export class VideosController {
     return { success: true, newCount: count };
   }
 
-  // ⚠️ IMPORTANT: :id route must be LAST to avoid catching other routes
+  // IMPORTANT: :id route must be LAST to avoid catching other routes
   @Get(':id')
   async getVideo(@Param('id') id: string, @Query('requesterId') requesterId?: string) {
     const video = await this.videosService.getVideoById(id);

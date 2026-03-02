@@ -3,13 +3,13 @@ import { Controller, Get } from '@nestjs/common';
 /**
  * Health Check Controller for Kubernetes
  * 
- * K8s sử dụng 2 loại probe:
- * - Liveness: Kiểm tra pod còn sống không → restart nếu fail
- * - Readiness: Kiểm tra pod sẵn sàng nhận traffic không
+ * K8s uses two types of probes:
+ * - Liveness: Checks if the pod is alive -> restarts on failure
+ * - Readiness: Checks if the pod is ready to receive traffic
  * 
- * Với worker service, cả 2 đều cần check:
- * 1. Process đang chạy (implicit - nếu không thì không response được)
- * 2. RabbitMQ connection (optional - worker sẽ tự reconnect)
+ * For the worker service, both probes check:
+ * 1. Process is running (implicit - no response means it's down)
+ * 2. RabbitMQ connection (optional - worker auto-reconnects)
  */
 @Controller('health')
 export class HealthController {
@@ -24,14 +24,14 @@ export class HealthController {
 
   @Get('live')
   liveness() {
-    // K8s Liveness probe - chỉ cần process còn sống
+    // K8s Liveness probe - only checks if the process is alive
     return { status: 'ok' };
   }
 
   @Get('ready')
   readiness() {
-    // K8s Readiness probe - có thể thêm check RabbitMQ connection
-    // Nhưng vì worker tự reconnect, ta chỉ cần check process
+    // K8s Readiness probe - could add RabbitMQ connection check
+    // Since the worker auto-reconnects, a basic process check suffices
     return { status: 'ok' };
   }
 }

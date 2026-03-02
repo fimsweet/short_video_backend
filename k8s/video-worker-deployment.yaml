@@ -72,7 +72,7 @@ spec:
               memory: "4Gi"      # Max 4GB RAM
           env:
             # ============================================
-            # ⚠️ CRITICAL: Set WORKER_CONCURRENCY=1
+            # CRITICAL: Set WORKER_CONCURRENCY=1
             # ============================================
             # FFmpeg is CPU-bound. Running multiple FFmpeg 
             # processes on 1 Pod causes:

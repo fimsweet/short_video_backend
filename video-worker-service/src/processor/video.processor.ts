@@ -50,7 +50,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
   // ============================================
   // FFmpeg process tracking for graceful shutdown
   // ============================================
-  // Luu reference t?i FFmpeg process dang ch?y d? c� th? kill khi shutdown
+  // Stores references to active FFmpeg processes for cleanup on shutdown
   private activeFFmpegProcesses: Map<string, any> = new Map();
 
   constructor(
@@ -95,7 +95,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       console.log('============================================');
     }
 
-    // Bắt đầu lắng nghe RabbitMQ queue
+    // Start listening to RabbitMQ queue
     await this.startWorker();
 
     // ============================================
@@ -125,7 +125,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       this.idleCheckInterval = null;
     }
 
-    // Cancel consumer để không nhận job mới
+    // Cancel consumer to stop accepting new jobs
     if (this.channel) {
       try {
         await this.channel.cancel('video-worker-consumer');
@@ -135,7 +135,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // Đợi job hiện tại hoàn thành (max 60s)
+    // Wait for current job(s) to finish (max 60s)
     const maxWait = 60;
     let waited = 0;
     while (this.currentJobCount > 0 && waited < maxWait) {
@@ -145,7 +145,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     }
 
     // ============================================
-    // Kill zombie FFmpeg processes nếu timeout
+    // Kill zombie FFmpeg processes if shutdown timed out
     // ============================================
     if (this.activeFFmpegProcesses.size > 0) {
       console.warn(`[WARN] Killing ${this.activeFFmpegProcesses.size} hanging FFmpeg process(es)...`);
@@ -519,7 +519,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     const { videoId, filePath, fileName, skipThumbnailGeneration, thumbnailTimestamp } = job;
 
     // ============================================
-    // ??? DECLARE PATHS OUTSIDE TRY FOR CLEANUP ACCESS
+    // DECLARE PATHS OUTSIDE TRY FOR CLEANUP ACCESS
     // ============================================
     // These variables need to be accessible in catch block
     // for proper cleanup when processing fails
@@ -532,7 +532,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       console.log(`[VIDEO] PROCESSING VIDEO: ${videoId}`);
       console.log(`${'='.repeat(60)}`);
       
-      // 1. lấy thông tin từ database
+      // 1. Fetch video metadata from database
       const video = await this.videoRepository.findOne({ where: { id: videoId } });
       if (!video) {
         throw new Error(`Video ${videoId} not found in database`);
@@ -579,7 +579,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       console.log(`[OK] Input file found: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
 
       // ============================================
-      // ??? VALIDATION: Check Video Duration
+      // VALIDATION: Check Video Duration
       // ============================================
       // Short video platforms typically limit video length:
       // - TikTok: up to 10 minutes (was 3 min, expanded in 2022)
@@ -635,7 +635,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       // Wait for both to complete
       const [, aiResult] = await Promise.all([ffmpegPromise, aiPromise]);
 
-      // 5. Tạo thumbnail từ video (skip if custom thumbnail already provided)
+      // 5. Generate thumbnail from video (skip if custom thumbnail already provided)
       if (skipThumbnailGeneration && video.thumbnailUrl) {
         console.log(`[THUMB] Skipping thumbnail generation - custom thumbnail already provided`);
         console.log(`   Existing thumbnail: ${video.thumbnailUrl}`);
@@ -697,7 +697,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
         console.warn(`[WARN] Could not delete raw video from S3: ${s3DeleteError.message}`);
       }
 
-      // 8. Cập nhật database với aspect ratio, thumbnail, và duration
+      // 8. Update database with aspect ratio, thumbnail, and duration
       await this.videoRepository.update(videoId, {
         status: VideoStatus.READY,
         hlsUrl: hlsUrl,
@@ -756,7 +756,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
         console.error(`[WARN] Cleanup failed (manual intervention may be needed):`, cleanupError.message);
       }
 
-      // Cập nhật status thành FAILED
+      // Update status to FAILED
       await this.videoRepository.update(videoId, {
         status: VideoStatus.FAILED,
         errorMessage: error.message || 'Unknown error',
@@ -865,10 +865,10 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
   // ============================================
   // ADAPTIVE BITRATE STREAMING (ABR)
   // ============================================
-  // Variants được tạo:
-  // - 720p (HD)   : Mạng tốt, WiFi
-  // - 480p (SD)   : Mạng trung bình, 4G
-  // - 360p (Low)  : Mạng yếu, 3G
+  // Generated variants:
+  // - 720p (HD)   : High bandwidth, WiFi
+  // - 480p (SD)   : Medium bandwidth, 4G
+  // - 360p (Low)  : Low bandwidth, 3G
   // ============================================
   private async convertToHLS(inputPath: string, outputDir: string, videoId?: string, originalAspectRatio: string = '16:9', videoDuration: number = 60): Promise<void> {
     console.log(`[VIDEO] [ABR] Starting Adaptive Bitrate encoding...`);
@@ -884,12 +884,12 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
 
     // Process each variant sequentially to avoid memory issues
     for (const variant of variants) {
-      console.log(`?? [ABR] Encoding ${variant.name} variant...`);
+      console.log(`[ABR] Encoding ${variant.name} variant...`);
       await this.encodeVariant(inputPath, outputDir, variant, videoId, videoDuration);
     }
 
     // Generate master playlist that references all variants
-    console.log(`[ABR] [ABR] Generating master playlist...`);
+    console.log(`[ABR] Generating master playlist...`);
     await this.generateMasterPlaylist(outputDir, variants, originalAspectRatio);
     
     console.log(`[OK] [ABR] Adaptive Bitrate encoding completed!`);

@@ -10,6 +10,6 @@ export const getDatabaseConfig = (configService: ConfigService): TypeOrmModuleOp
   password: configService.get('DB_PASSWORD'),
   database: configService.get('DB_DATABASE'),
   entities: [Video],
-  synchronize: false, // Worker không tự động sync schema
+  synchronize: false, // Worker does not auto-sync schema
   logging: true,
 });

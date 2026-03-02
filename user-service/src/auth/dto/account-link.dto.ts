@@ -1,13 +1,13 @@
 import { IsEmail, IsString, IsNotEmpty, Matches, IsOptional, MinLength } from 'class-validator';
 
-// DTO để gửi OTP link email vào tài khoản
+// DTO for sending OTP to link email to account
 export class SendLinkEmailOtpDto {
   @IsEmail()
   @IsNotEmpty()
   email: string;
 }
 
-// DTO để verify và link email vào tài khoản
+// DTO for verifying and linking email to account
 export class VerifyLinkEmailDto {
   @IsEmail()
   @IsNotEmpty()
@@ -24,14 +24,14 @@ export class VerifyLinkEmailDto {
   password?: string;
 }
 
-// DTO để link SĐT vào tài khoản (dùng Firebase token)
+// DTO for linking phone number to account (using Firebase token)
 export class LinkPhoneDto {
   @IsString()
   @IsNotEmpty()
   firebaseIdToken: string;
 }
 
-// DTO để gửi OTP reset password qua phone
+// DTO for sending OTP to reset password via phone
 export class SendPhoneResetPasswordOtpDto {
   @IsString()
   @IsNotEmpty()
@@ -39,7 +39,7 @@ export class SendPhoneResetPasswordOtpDto {
   phone: string;
 }
 
-// DTO để verify OTP reset password qua phone
+// DTO for verifying OTP to reset password via phone
 export class VerifyPhoneResetPasswordDto {
   @IsString()
   @IsNotEmpty()
@@ -52,7 +52,7 @@ export class VerifyPhoneResetPasswordDto {
   otp: string;
 }
 
-// DTO để đổi password sau khi verify OTP
+// DTO for resetting password after OTP verification
 export class ResetPasswordWithPhoneDto {
   @IsString()
   @IsNotEmpty()
@@ -72,7 +72,7 @@ export class ResetPasswordWithPhoneDto {
   newPassword: string;
 }
 
-// DTO để lấy thông tin account liên kết
+// DTO for retrieving linked account information
 export class AccountInfoDto {
   id: number;
   username: string;

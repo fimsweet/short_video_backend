@@ -99,7 +99,7 @@ export class UsersService {
   }
 
   async findOne(username: string): Promise<User | null> {
-    // ✅ Check cache first
+    // Check cache first
     const cacheKey = `user:username:${username}`;
     const cachedUser = await this.cacheManager.get<User>(cacheKey);
 
@@ -114,7 +114,7 @@ export class UsersService {
     });
 
     if (user) {
-      // ✅ Store in cache for 10 minutes (user data rarely changes)
+      // Store in cache for 10 minutes (user data rarely changes)
       await this.cacheManager.set(cacheKey, user, 600000);
     }
 
@@ -142,7 +142,7 @@ export class UsersService {
   }
 
   async findById(id: number): Promise<User | null> {
-    // ✅ Check cache first
+    // Check cache first
     const cacheKey = `user:id:${id}`;
     const cachedUser = await this.cacheManager.get<User>(cacheKey);
 
@@ -157,9 +157,9 @@ export class UsersService {
     });
 
     if (user) {
-      // ✅ Store in cache for 10 minutes
+      // Store in cache for 10 minutes
       await this.cacheManager.set(cacheKey, user, 600000);
-      // ✅ Also cache by username for faster lookup
+      // Also cache by username for faster lookup
       await this.cacheManager.set(`user:username:${user.username}`, user, 600000);
     }
 
@@ -315,7 +315,7 @@ export class UsersService {
     user.avatar = avatarPath;
     const updatedUser = await this.userRepository.save(user);
 
-    // ✅ Invalidate cache
+    // Invalidate cache
     await this.cacheManager.del(`user:id:${userId}`);
     await this.cacheManager.del(`user:username:${user.username}`);
 
@@ -331,7 +331,7 @@ export class UsersService {
     user.avatar = null;
     const updatedUser = await this.userRepository.save(user);
 
-    // ✅ Invalidate cache
+    // Invalidate cache
     await this.cacheManager.del(`user:id:${userId}`);
     await this.cacheManager.del(`user:username:${user.username}`);
 
@@ -370,7 +370,7 @@ export class UsersService {
       const updatedUser = await this.userRepository.save(user);
       console.log(`Profile updated for user ${userId}`);
 
-      // ✅ Invalidate cache when user data changes
+      // Invalidate cache when user data changes
       await this.cacheManager.del(`user:id:${userId}`);
       await this.cacheManager.del(`user:username:${updatedUser.username}`);
       console.log(`Cache invalidated for user ${userId}`);

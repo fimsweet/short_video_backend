@@ -3,7 +3,7 @@ import { extname } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 
 // ============================================
-// 🔒 ALLOWED VIDEO FORMATS
+// ALLOWED VIDEO FORMATS
 // ============================================
 // These are real video MIME types that FFmpeg can process
 // Used for both initial filter AND magic number validation
@@ -35,14 +35,14 @@ export const multerConfig = {
     },
   }),
   fileFilter: (req, file, callback) => {
-    // Log để debug
+    // Log file upload details for debugging
     console.log('File upload attempt:');
     console.log('  Original name:', file.originalname);
     console.log('  MIME type:', file.mimetype);
     console.log('  Field name:', file.fieldname);
     
     // ============================================
-    // 🔒 SECURITY: Multi-layer validation
+    // SECURITY: Multi-layer validation
     // ============================================
     // Layer 1: Check MIME type from request header (this filter)
     // Layer 2: Check magic number after file saved (in videos.service.ts)

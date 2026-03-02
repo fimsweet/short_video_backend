@@ -31,7 +31,7 @@ import { getDatabaseConfig } from './config/database.config';
       envFilePath: '.env',
     }),
     // ============================================
-    // 🛡️ RATE LIMITING - Protect against DDoS
+    // RATE LIMITING - Protect against DDoS
     // ============================================
     // Default: 100 requests per 60 seconds per IP
     // Upload endpoints have stricter limits (see VideosController)
