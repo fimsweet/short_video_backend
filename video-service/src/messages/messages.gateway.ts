@@ -402,6 +402,39 @@ export class MessagesGateway implements OnGatewayInit, OnGatewayConnection, OnGa
   }
 
   /**
+   * Emit messagePinned event from HTTP controller
+   * Called when a message is pinned via REST API
+   */
+  emitMessagePinned(recipientId: string, senderId: string, messageData: any) {
+    this.server.to(`user_${recipientId}`).emit('messagePinned', messageData);
+    this.server.to(`user_${senderId}`).emit('messagePinned', messageData);
+  }
+
+  /**
+   * Emit messageUnpinned event from HTTP controller
+   * Called when a message is unpinned via REST API
+   */
+  emitMessageUnpinned(recipientId: string, senderId: string, messageData: any) {
+    this.server.to(`user_${recipientId}`).emit('messageUnpinned', messageData);
+    this.server.to(`user_${senderId}`).emit('messageUnpinned', messageData);
+  }
+
+  /**
+   * Emit messageUnsent events from HTTP controller
+   * Called when messages are unsent via REST API instead of WebSocket
+   */
+  emitMessageUnsent(recipientId: string, senderId: string, messageId: string) {
+    this.server.to(`user_${recipientId}`).emit('messageUnsent', {
+      messageId,
+      unsendBy: senderId,
+    });
+    this.server.to(`user_${senderId}`).emit('messageUnsent', {
+      messageId,
+      unsendBy: senderId,
+    });
+  }
+
+  /**
    * Emit messageEdited events from HTTP controller
    * Called when messages are edited via REST API instead of WebSocket
    */

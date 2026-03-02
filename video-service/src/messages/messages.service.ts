@@ -396,9 +396,13 @@ export class MessagesService {
       throw new NotFoundException('Message not found');
     }
 
-    // Only the user who pinned can unpin
-    if (message.pinnedBy !== userId) {
+    // Both conversation participants can unpin
+    if (message.senderId !== userId && message.recipientId !== userId) {
       throw new ForbiddenException('You cannot unpin this message');
+    }
+
+    if (!message.pinnedBy) {
+      throw new ForbiddenException('This message is not pinned');
     }
 
     // Use update() to reliably set NULL in DB (save() with null can be unreliable)
@@ -420,7 +424,7 @@ export class MessagesService {
     return this.messageRepository
       .createQueryBuilder('message')
       .where('message.conversationId = :conversationId', { conversationId })
-      .andWhere('message.pinnedBy = :userId', { userId })
+      .andWhere('message.pinnedBy IS NOT NULL')
       .andWhere('message.isDeletedForEveryone = false')
       .andWhere(
         '(message.deletedForUserIds IS NULL OR message.deletedForUserIds NOT LIKE :userPattern)',
@@ -557,7 +561,7 @@ export class MessagesService {
    * Delete message for everyone (unsend)
    * Only the sender can unsend and only within the time limit
    */
-  async deleteForEveryone(messageId: string, userId: string): Promise<{ success: boolean; message?: string; canUnsend?: boolean }> {
+  async deleteForEveryone(messageId: string, userId: string): Promise<{ success: boolean; message?: string; canUnsend?: boolean; senderId?: string; recipientId?: string }> {
     const message = await this.messageRepository.findOne({ where: { id: messageId } });
     
     if (!message) {
@@ -622,7 +626,7 @@ export class MessagesService {
       await this.conversationRepository.save(conversation);
     }
 
-    return { success: true };
+    return { success: true, senderId: message.senderId, recipientId: message.recipientId };
   }
 
   /**

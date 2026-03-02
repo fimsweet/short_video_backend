@@ -122,6 +122,16 @@ export class MessagesController {
     @Query('userId') userId: string,
   ) {
     const message = await this.messagesService.pinMessage(messageId, userId);
+
+    // Emit WebSocket event so the other user sees the pin in real-time
+    const otherUserId = message.senderId === userId ? message.recipientId : message.senderId;
+    this.messagesGateway.emitMessagePinned(otherUserId, userId, {
+      messageId: message.id,
+      pinnedBy: message.pinnedBy,
+      pinnedAt: message.pinnedAt,
+      message: message,
+    });
+
     return { success: true, data: message };
   }
 
@@ -131,6 +141,14 @@ export class MessagesController {
     @Query('userId') userId: string,
   ) {
     const message = await this.messagesService.unpinMessage(messageId, userId);
+
+    // Emit WebSocket event so the other user sees the unpin in real-time
+    const otherUserId = message.senderId === userId ? message.recipientId : message.senderId;
+    this.messagesGateway.emitMessageUnpinned(otherUserId, userId, {
+      messageId: message.id,
+      unpinnedBy: userId,
+    });
+
     return { success: true, data: message };
   }
 
@@ -249,6 +267,13 @@ export class MessagesController {
     @Query('userId') userId: string,
   ) {
     const result = await this.messagesService.deleteForEveryone(messageId, userId);
+
+    // Emit WebSocket event so the other user sees the unsend in real-time
+    if (result.success && result.senderId && result.recipientId) {
+      const otherUserId = result.senderId === userId ? result.recipientId : result.senderId;
+      this.messagesGateway.emitMessageUnsent(otherUserId, userId, messageId);
+    }
+
     return result;
   }
 

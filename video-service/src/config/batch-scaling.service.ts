@@ -98,7 +98,7 @@ export class BatchScalingService implements OnModuleInit, OnModuleDestroy {
   };
 
   constructor(private configService: ConfigService) {
-    this.rabbitMQUrl = this.configService.get<string>('RABBITMQ_URL') || 'amqp://admin:password@localhost:5672';
+    this.rabbitMQUrl = this.configService.get<string>('RABBITMQ_URL') || 'amqp://user:password@localhost:5672';
     this.queueName = this.configService.get<string>('RABBITMQ_QUEUE') || 'video_processing_queue';
     this.jobQueueArn = this.configService.get<string>('AWS_BATCH_JOB_QUEUE') || '';
     this.jobDefinitionArn = this.configService.get<string>('AWS_BATCH_JOB_DEFINITION') || '';
