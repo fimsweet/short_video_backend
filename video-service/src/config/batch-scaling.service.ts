@@ -1,28 +1,6 @@
 // ============================================
 // AWS BATCH AUTO-SCALING SERVICE
 // ============================================
-// This service monitors the RabbitMQ queue and automatically
-// submits AWS Batch jobs to scale video processing workers.
-//
-// HOW IT WORKS:
-// 1. Periodically checks RabbitMQ queue depth (every 30 seconds)
-// 2. If messages in queue > threshold → Submit AWS Batch job
-// 3. AWS Batch automatically provisions EC2 instances (Spot = cheap)
-// 4. Each Batch job runs the video-worker Docker container
-// 5. Worker consumes messages from RabbitMQ and processes videos
-// 6. When queue is empty → Batch job finishes → EC2 terminates
-//
-// COST OPTIMIZATION:
-// - Uses EC2 Spot Instances (up to 90% cheaper than On-Demand)
-// - Workers auto-terminate when no work available
-// - No idle resources = no wasted money
-//
-// ARCHITECTURE:
-//   Upload → RabbitMQ Queue ← Monitor (this service)
-//                ↓                    ↓
-//          Existing Worker    AWS Batch (auto-scale)
-//          (always running)   (on-demand workers)
-// ============================================
 
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
